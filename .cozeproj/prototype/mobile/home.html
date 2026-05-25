@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+  <script src="https://lf-code-agent.coze.cn/obj/x-ai-cn/cdn/jquery/jquery-3.7.1.min.js"></script>
+  <script src="https://lf-code-agent.coze.cn/obj/x-ai-cn/cdn/lucide/lucide-1.11.0.min.js"></script>
+  <script src="https://lf-code-agent.coze.cn/obj/x-ai-cn/cdn/tailwindcss/tailwindcss-browser-4.2.4.min.js"></script>
+
+  <style type="text/tailwindcss">
+    @theme {
+      /* === 品牌色 === */
+      --color-primary:              #1A73E8;
+      --color-primary_container:    #1A73E820;
+      --color-on-primary:           #ffffff;
+      /* === 背景 / 表面（深色科技风，手表小屏幕） === */
+      --color-background:                 #0D0D0D;
+      --color-surface-container-lowest:   #0A0A0A;
+      --color-surface:                    #141414;
+      --color-surface-container:          #1A1A1A;
+      --color-surface-container-high:     #1E1E1E;
+      --color-surface-container-highest:  #262626;
+      /* === 文字 === */
+      --color-on-surface:           #E0E0E0;
+      --color-on-surface-variant:   #888888;
+      /* === 功能色 === */
+      --color-success:  #43A047;
+      --color-error:    #C62828;
+      --color-warning:  #f59e0b;
+      /* === 边框 === */
+      --color-outline:          #333333;
+      --color-outline-variant:  #2A2A2A;
+      /* === 圆角 === */
+      --radius-sm:   0.25rem;
+      --radius-md:   0.5rem;
+      --radius-lg:   0.75rem;
+      --radius-xl:   0.75rem;
+      --radius-2xl:  1rem;
+      --radius-full: 9999px;
+      /* === 阴影 === */
+      --shadow-card:   0 2px 8px rgba(0,0,0,0.4);
+      --shadow-float:  0 4px 16px rgba(0,0,0,0.5);
+      --shadow-dialog: 0 8px 32px rgba(0,0,0,0.6);
+      /* === 字体 === */
+      --font-sans: "PingFang SC", system-ui, sans-serif;
+    }
+  </style>
+
+  <style>
+    body {
+      min-height: max(812px, 100dvh);
+      font-family: "PingFang SC", system-ui, sans-serif;
+      background-color: #0D0D0D;
+      color: #E0E0E0;
+    }
+
+    @keyframes typing-bounce {
+      0%, 80%, 100% { opacity: 0.3; }
+      40% { opacity: 1; }
+    }
+    .typing-dot {
+      animation: typing-bounce 1.2s infinite ease-in-out both;
+    }
+    .typing-dot:nth-child(1) { animation-delay: 0ms; }
+    .typing-dot:nth-child(2) { animation-delay: 200ms; }
+    .typing-dot:nth-child(3) { animation-delay: 400ms; }
+  </style>
+
+  <!-- 图片兜底 -->
+  <script>
+    document.addEventListener('error', function (e) {
+      const img = e.target;
+      if (img.tagName !== 'IMG' || img.dataset.fallback) return;
+      img.dataset.fallback = '1';
+      const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const cat = img.getAttribute('data-category') || '其他';
+      const alt = img.getAttribute('alt') || '';
+      const label = esc(alt.length > 8 ? alt.slice(0, 8) + '…' : alt);
+      const icons = { '人物': '👤', '自然风景': '🏞', '动物': '🐾', '建筑城市': '🏙', '运动体育': '⚽', '交通工具': '🚗', '食物': '🍽', '服饰时尚': '👗', '商业科技': '💼', '游戏娱乐': '🎮', '艺术': '🎨', '其他': '🖼' };
+      const icon = icons[cat] || '🖼';
+      const w = img.width || 400, h = img.height || 300;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="%23f3f4f6"/><text x="50%" y="45%" text-anchor="middle" font-size="${Math.min(w, h) * 0.18}" dominant-baseline="central">${icon}</text><text x="50%" y="68%" text-anchor="middle" font-size="${Math.min(w, h) * 0.07}" fill="%239ca3af" font-family="system-ui,sans-serif" dominant-baseline="central">${label}</text></svg>`;
+      img.src = 'data:image/svg+xml,' + svg;
+    }, true);
+  </script>
+</head>
+
+<body class="bg-background text-on-surface font-sans">
+
+  <!-- 手表应用：单页面无TabBar -->
+
+  <main class="flex flex-col min-h-[100dvh]">
+    <!-- @main-content:start -->
+    <div class="flex flex-col h-[100dvh] px-4">
+      <!-- 顶部标题栏（约40dp） -->
+      <div class="h-10 flex flex-col items-center justify-center shrink-0" id="header-title">
+        <h1 class="text-base font-bold text-white tracking-wide">✦ 小艺 Claw</h1>
+        <p class="text-[9px] text-on-surface-variant leading-tight">抬腕说话 · AI秒回</p>
+      </div>
+
+      <!-- 状态栏（约20dp） -->
+      <div class="h-5 flex items-center justify-center shrink-0" id="header-status">
+        <span class="text-[10px] text-success flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+          已连接
+        </span>
+      </div>
+
+      <!-- 中部聊天记录区（可滚动，填充剩余空间） -->
+      <div class="flex-1 overflow-y-auto py-2 space-y-3 items-start" id="chat-list">
+        <!-- 列表-AI消息1：问候语 -->
+        <div class="flex flex-col max-w-[90%]" id="msg-ai-1">
+          <span class="text-[9px] text-primary mb-1 ml-1">小艺Claw</span>
+          <div class="bg-surface-container-high rounded-xl px-3 py-2">
+            <p class="text-sm text-on-surface leading-relaxed">您好！我是小艺Claw，您的腕上AI助手。抬腕即可与我对话，今天有什么可以帮您的？</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 ml-1">09:41</span>
+        </div>
+
+        <!-- 列表-用户消息1：问天气 -->
+        <div class="flex flex-col max-w-[90%] self-end items-end" id="msg-user-1">
+          <div class="bg-primary rounded-xl px-3 py-2">
+            <p class="text-sm text-on-primary leading-relaxed">今天天气怎么样？</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 mr-1">09:41</span>
+        </div>
+
+        <!-- 列表-AI消息2：天气回复 -->
+        <div class="flex flex-col max-w-[90%]" id="msg-ai-2">
+          <span class="text-[9px] text-primary mb-1 ml-1">小艺Claw</span>
+          <div class="bg-surface-container-high rounded-xl px-3 py-2">
+            <p class="text-sm text-on-surface leading-relaxed">今天北京晴，15-22°C，适合户外运动，记得防晒哦！</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 ml-1">09:42</span>
+        </div>
+
+        <!-- 列表-用户消息2：定闹钟 -->
+        <div class="flex flex-col max-w-[90%] self-end items-end" id="msg-user-2">
+          <div class="bg-primary rounded-xl px-3 py-2">
+            <p class="text-sm text-on-primary leading-relaxed">帮我定个明天早上7点的闹钟</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 mr-1">09:42</span>
+        </div>
+
+        <!-- 列表-AI消息3：闹钟确认 -->
+        <div class="flex flex-col max-w-[90%]" id="msg-ai-3">
+          <span class="text-[9px] text-primary mb-1 ml-1">小艺Claw</span>
+          <div class="bg-surface-container-high rounded-xl px-3 py-2">
+            <p class="text-sm text-on-surface leading-relaxed">好的，已为您设置明天早上7:00的闹钟，标签为"早起"。</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 ml-1">09:43</span>
+        </div>
+
+        <!-- 列表-用户消息3：查心率 -->
+        <div class="flex flex-col max-w-[90%] self-end items-end" id="msg-user-3">
+          <div class="bg-primary rounded-xl px-3 py-2">
+            <p class="text-sm text-on-primary leading-relaxed">查询一下我的心率</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 mr-1">09:43</span>
+        </div>
+
+        <!-- 列表-AI消息4：心率数据 -->
+        <div class="flex flex-col max-w-[90%]" id="msg-ai-4">
+          <span class="text-[9px] text-primary mb-1 ml-1">小艺Claw</span>
+          <div class="bg-surface-container-high rounded-xl px-3 py-2">
+            <p class="text-sm text-on-surface leading-relaxed">您当前心率72次/分，静息心率范围正常。今日平均心率为68次/分。</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 ml-1">09:44</span>
+        </div>
+
+        <!-- 列表-用户消息4：播放音乐 -->
+        <div class="flex flex-col max-w-[90%] self-end items-end" id="msg-user-4">
+          <div class="bg-primary rounded-xl px-3 py-2">
+            <p class="text-sm text-on-primary leading-relaxed">播放轻音乐</p>
+          </div>
+          <span class="text-[8px] text-white/30 mt-1 mr-1">09:44</span>
+        </div>
+      </div>
+
+      <!-- 输入状态指示器（约30dp） -->
+      <div class="h-[30px] flex items-center shrink-0" id="typing-indicator">
+        <div class="flex items-center gap-1">
+          <span class="text-[10px] text-on-surface-variant">正在输入</span>
+          <div class="flex items-center gap-0.5">
+            <span class="w-1 h-1 rounded-full bg-on-surface-variant typing-dot"></span>
+            <span class="w-1 h-1 rounded-full bg-on-surface-variant typing-dot"></span>
+            <span class="w-1 h-1 rounded-full bg-on-surface-variant typing-dot"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部输入栏（约60dp） -->
+      <div class="pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] flex items-center gap-2 shrink-0" id="input-bar">
+        <!-- 麦克风按钮 -->
+        <button class="flex-1 h-11 rounded-[22px] bg-surface-container text-on-surface-variant text-sm border border-outline flex items-center justify-center gap-2 select-none touch-none" id="btn-mic">
+          <i data-lucide="mic" class="w-4 h-4"></i>
+          <span>按住说话</span>
+        </button>
+        <!-- 发送按钮 -->
+        <button class="w-11 h-11 rounded-full bg-primary flex items-center justify-center text-on-primary shrink-0" id="btn-send">
+          <i data-lucide="send" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+    <!-- @main-content:end -->
+  </main>
+
+  <script>
+    $(function() {
+      // 导航辅助函数
+      function navPush(route) {
+        console.log(`[原型演示] PUSH 到: ${route}`);
+        window.location.href = route;
+      }
+      function navReplace(route) {
+        console.log(`[原型演示] REPLACE 为: ${route}`);
+        window.location.replace(route);
+      }
+      function navReset(route) {
+        console.log(`[原型演示] RESET 到: ${route}`);
+        window.location.href = route;
+      }
+      function navBack() {
+        console.log(`[原型演示] BACK 返回上一页`);
+        if(window.history.length > 1) window.history.back();
+      }
+
+      // 麦克风按钮 - 按住说话交互
+      // 完整行为：
+      // 1. 按下时（touchstart/mousedown）按钮背景变为 primary，文字变为"松开结束"，同时显示录音波形动画
+      // 2. 长按期间实时采集语音输入，显示音量波形反馈
+      // 3. 松开时（touchend/mouseup/mouseleave）停止录音，将语音转换为文字，并将文字消息添加到聊天列表末尾
+      // 4. 发送后触发AI回复，显示"正在输入"状态，2-3秒后AI消息加入列表
+      $('#btn-mic').on('touchstart mousedown', function(e) {
+        e.preventDefault();
+        $(this).removeClass('bg-surface-container text-on-surface-variant').addClass('bg-primary text-on-primary');
+        $(this).find('span').text('松开结束');
+        console.log('开始录音');
+      });
+      $('#btn-mic').on('touchend mouseup mouseleave', function(e) {
+        e.preventDefault();
+        $(this).removeClass('bg-primary text-on-primary').addClass('bg-surface-container text-on-surface-variant');
+        $(this).find('span').text('按住说话');
+        console.log('结束录音，应转换为文字并发送');
+      });
+
+      // 发送按钮 - 点击发送
+      // 完整行为：
+      // 1. 点击后将当前输入内容（文字或语音转写结果）发送到聊天列表
+      // 2. 清空输入状态
+      // 3. 触发AI回复流程
+      $('#btn-send').on('click', function() {
+        console.log('点击发送按钮，应发送当前消息');
+      });
+    });
+  </script>
+  <script>lucide.createIcons();</script>
+</body>
+
+</html>

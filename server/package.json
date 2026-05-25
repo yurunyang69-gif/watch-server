@@ -12,7 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "2.95.3",
     "cors": "^2.8.5",
-    "coze-coding-dev-sdk": "^0.7.16",
+    "coze-coding-dev-sdk": "^0.7.23",
     "dayjs": "^1.11.20",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",

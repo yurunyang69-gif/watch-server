@@ -1,0 +1,12 @@
+{
+  "elements": [
+    {
+      "type": "html",
+      "options": {
+        "path": ".cozeproj/prototype/mobile/home.html"
+      },
+      "title": "腕上AI助手",
+      "size": "mobile"
+    }
+  ]
+}
