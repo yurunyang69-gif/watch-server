@@ -14,6 +14,7 @@ import { Audio, AudioMode } from 'expo-av';
 import { Screen } from '@/components/Screen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontAwesome6 } from '@expo/vector-icons';
+import Markdown from 'react-native-markdown-display';
 import { createFormDataFile } from '@/utils';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
@@ -50,6 +51,7 @@ export default function ChatPage() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [deviceId, setDeviceId] = useState<string>('');
   const [hasLoadedHistory, setHasLoadedHistory] = useState(false);
+  const [docMode, setDocMode] = useState(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -257,12 +259,12 @@ export default function ChatPage() {
       /**
        * 服务端文件：server/src/index.ts
        * 接口：POST /api/v1/send
-       * Body 参数：text: string, device_id: string
+       * Body 参数：text: string, device_id: string, doc_mode?: boolean
        */
       const sendRes = await fetch(`${API_BASE}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, device_id: deviceId }),
+        body: JSON.stringify({ text, device_id: deviceId, doc_mode: docMode }),
       });
 
       if (!sendRes.ok) {
@@ -337,7 +339,7 @@ export default function ChatPage() {
       };
       setMessages(prev => [...prev, errorMsg]);
     }
-  }, [inputText, isSending, deviceId]);
+  }, [inputText, isSending, deviceId, docMode]);
 
   // 定时同步历史消息（多端准实时同步）
   const syncHistory = useCallback(async () => {
@@ -408,14 +410,33 @@ export default function ChatPage() {
           className={`px-3 py-2 rounded-xl ${
             isUser ? 'bg-accent' : 'bg-[#1E1E1E]'
           }`}
+          style={{ minWidth: isUser ? undefined : 40 }}
         >
-          <Text
-            className={`text-sm leading-relaxed ${
-              isUser ? 'text-white' : 'text-[#E0E0E0]'
-            }`}
-          >
-            {item.text}
-          </Text>
+          {isUser ? (
+            <Text className="text-sm leading-relaxed text-white">
+              {item.text}
+            </Text>
+          ) : (
+            <Markdown
+              style={{
+                body: { color: '#E0E0E0', fontSize: 14, lineHeight: 20 },
+                heading1: { color: '#E0E0E0', fontSize: 18, fontWeight: 'bold', marginVertical: 8 },
+                heading2: { color: '#E0E0E0', fontSize: 16, fontWeight: 'bold', marginVertical: 6 },
+                heading3: { color: '#E0E0E0', fontSize: 14, fontWeight: 'bold', marginVertical: 4 },
+                strong: { color: '#ffffff', fontWeight: 'bold' },
+                paragraph: { color: '#E0E0E0', fontSize: 14, lineHeight: 20, marginVertical: 2 },
+                bullet_list: { marginVertical: 2 },
+                ordered_list: { marginVertical: 2 },
+                list_item: { marginVertical: 1 },
+                link: { color: '#1A73E8' },
+                code_inline: { backgroundColor: '#333', color: '#E0E0E0', paddingHorizontal: 4, borderRadius: 4, fontSize: 12 },
+                code_block: { backgroundColor: '#1A1A1A', padding: 8, borderRadius: 8, fontSize: 12 },
+                blockquote: { borderLeftWidth: 3, borderLeftColor: '#1A73E8', paddingLeft: 8, marginVertical: 4 },
+              }}
+            >
+              {item.text}
+            </Markdown>
+          )}
         </View>
         <Text className="text-[8px] text-white/30 mt-0.5 mx-1">
           {item.timestamp}
@@ -454,12 +475,12 @@ export default function ChatPage() {
             雨润 Claw
           </Text>
           <Text className="text-[9px] text-[#888888] leading-tight mt-0.5">
-            Adam's AI · 抬腕说话
+            Adam&apos;s AI · 抬腕说话
           </Text>
         </View>
 
-        {/* 状态栏 */}
-        <View className="h-5 flex items-center justify-center shrink-0">
+        {/* 状态栏 + 文档模式切换 */}
+        <View className="h-5 flex flex-row items-center justify-center shrink-0 gap-2">
           <View className="flex flex-row items-center gap-1">
             <FontAwesome6
               name={statusDisplay.icon}
@@ -470,6 +491,21 @@ export default function ChatPage() {
               {statusDisplay.text}
             </Text>
           </View>
+          <TouchableOpacity
+            onPress={() => setDocMode(v => !v)}
+            activeOpacity={0.7}
+            className="flex flex-row items-center gap-1 px-2 py-0.5 rounded-full"
+            style={{ backgroundColor: docMode ? 'rgba(26,115,232,0.2)' : 'transparent' }}
+          >
+            <FontAwesome6
+              name={docMode ? 'file-lines' : 'comment'}
+              size={8}
+              color={docMode ? '#1A73E8' : '#666666'}
+            />
+            <Text style={{ color: docMode ? '#1A73E8' : '#666666', fontSize: 9 }}>
+              {docMode ? '文档' : '对话'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* 聊天记录区 */}

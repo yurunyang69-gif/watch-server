@@ -79,12 +79,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           "action": "MAIN",
           "category": ["LAUNCHER"],
           "autoVerify": true
-        },
-        {
-          "action": "MAIN",
-          "category": ["LAUNCHER"],
-          "label": "Adam Claw",
-          "autoVerify": true
         }
       ]
     },

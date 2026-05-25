@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
 import multer from "multer";
-import { ASRClient, LLMClient, Config, HeaderUtils } from "coze-coding-dev-sdk";
+import { ASRClient, LLMClient, Config, HeaderUtils, SearchClient } from "coze-coding-dev-sdk";
 import { getSupabaseClient } from "./storage/database/supabase-client.js";
 
 const app = express();
@@ -107,16 +107,19 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
       console.error('Insert user message error:', insertError);
     }
 
+    // 是否启用文档模式
+    const docMode = req.body.doc_mode === true;
+
     // 后台异步调用LLM生成回复
     const generateReply = async () => {
       try {
-        // 查询历史消息作为上下文
+        // 查询历史消息作为上下文（最多50条，增强记忆）
         const { data: historyData, error: historyError } = await client
           .from('chat_messages')
           .select('type, text')
           .eq('device_id', device_id || 'unknown')
           .order('created_at', { ascending: true })
-          .limit(20);
+          .limit(50);
 
         if (historyError) {
           console.error('History fetch error:', historyError);
@@ -129,12 +132,39 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
 
         const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
         const config = new Config();
+
+        // ========== 网页资料搜索 ==========
+        let searchContext = '';
+        try {
+          const searchClient = new SearchClient(config, customHeaders);
+          const searchRes = await searchClient.webSearch(text, 5, true);
+          if (searchRes.web_items && searchRes.web_items.length > 0) {
+            const items = searchRes.web_items.slice(0, 3).map((item, i) => {
+              return `${i + 1}. ${item.title}\n来源：${item.site_name || '未知'}\n摘要：${item.snippet || ''}`;
+            }).join('\n\n');
+            searchContext = `\n\n【网络搜索参考资料】\n${items}\n\n`;
+          }
+        } catch (searchErr) {
+          console.error('Search error:', searchErr);
+        }
+
         const llmClient = new LLMClient(config, customHeaders);
+
+        // 构建system prompt
+        let systemPrompt = '你是雨润Claw，一位贴心的腕上AI助手。你的主人叫杨雨润（英文名Adam）。请结合之前的对话上下文回答用户，保持记忆连贯性。你可以称呼主人为"雨润"或"Adam"。';
+        if (docMode) {
+          systemPrompt += '\n\n【文档模式】用户要求以结构化文档形式输出。请使用Markdown格式，包含：\n- 清晰的标题层级（# ## ###）\n- 分点论述\n- 适当的加粗强调\n- 结构化、条理清晰的排版\n回复可以较长（300-800字），确保内容完整、专业。';
+        } else {
+          systemPrompt += '\n\n默认模式：用简洁、友好、口语化的中文回复，适合在手表小屏幕上阅读。回复控制在100字以内。';
+        }
+        if (searchContext) {
+          systemPrompt += '\n\n【搜索增强】以下是从互联网搜索到的最新参考资料，请优先结合这些资料回答用户问题：' + searchContext;
+        }
 
         const messages = [
           {
             role: 'system' as const,
-            content: '你是雨润Claw，一位贴心的腕上AI助手。你的主人叫杨雨润（英文名Adam）。请用简洁、友好、口语化的中文回复用户，适合在手表小屏幕上阅读。回复控制在100字以内。你可以称呼主人为"雨润"或"Adam"。',
+            content: systemPrompt,
           },
           ...historyMessages,
         ];
