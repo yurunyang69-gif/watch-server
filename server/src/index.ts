@@ -1,13 +1,10 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
 import multer from "multer";
-import { ASRClient, Config, HeaderUtils } from "coze-coding-dev-sdk";
+import { ASRClient, LLMClient, Config, HeaderUtils } from "coze-coding-dev-sdk";
 
 const app = express();
 const port = process.env.PORT || 9091;
-
-// 外部AI服务地址
-const EXTERNAL_AI_BASE = "https://d0a2710d54693b41-139-9-149-221.serveousercontent.com";
 
 // Multer 内存存储（不写入磁盘）
 const upload = multer({ storage: multer.memoryStorage() });
@@ -16,6 +13,31 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// 内存存储：对话状态
+interface ChatRecord {
+  id: string;
+  status: 'pending' | 'done' | 'error';
+  reply?: string;
+  error?: string;
+  createdAt: number;
+}
+
+const chatStore = new Map<string, ChatRecord>();
+
+// 全局对话历史（简单上下文记忆）
+const conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+const MAX_HISTORY = 20;
+
+// 清理过期记录（1小时）
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, record] of chatStore.entries()) {
+    if (now - record.createdAt > 60 * 60 * 1000) {
+      chatStore.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
 
 // Health check
 app.get('/api/v1/health', (req, res) => {
@@ -36,16 +58,70 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
       return;
     }
 
-    const response = await fetch(`${EXTERNAL_AI_BASE}/api/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+    const id = Date.now().toString();
+    chatStore.set(id, {
+      id,
+      status: 'pending',
+      createdAt: Date.now(),
     });
 
-    const data = await response.json();
-    res.status(response.status).json(data);
+    // 保存用户消息到历史
+    conversationHistory.push({ role: 'user', content: text });
+    if (conversationHistory.length > MAX_HISTORY) {
+      conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY);
+    }
+
+    // 后台异步调用LLM生成回复
+    const generateReply = async () => {
+      try {
+        const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
+        const config = new Config();
+        const client = new LLMClient(config, customHeaders);
+
+        const messages = [
+          {
+            role: 'system' as const,
+            content: '你是小艺Claw，一位贴心的腕上AI助手。请用简洁、友好、口语化的中文回复用户，适合在手表小屏幕上阅读。回复控制在100字以内。',
+          },
+          ...conversationHistory.map(h => ({ role: h.role, content: h.content })),
+        ];
+
+        const response = await client.invoke(messages, {
+          model: 'doubao-seed-2-0-lite-260215',
+          temperature: 0.8,
+        });
+
+        const reply = response.content || '抱歉，我没听懂，请再说一遍。';
+
+        // 保存AI回复到历史
+        conversationHistory.push({ role: 'assistant', content: reply });
+        if (conversationHistory.length > MAX_HISTORY) {
+          conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY);
+        }
+
+        chatStore.set(id, {
+          id,
+          status: 'done',
+          reply,
+          createdAt: Date.now(),
+        });
+      } catch (err) {
+        console.error('LLM generation error:', err);
+        chatStore.set(id, {
+          id,
+          status: 'error',
+          error: 'AI回复生成失败',
+          createdAt: Date.now(),
+        });
+      }
+    };
+
+    // 启动异步生成（不阻塞响应）
+    generateReply();
+
+    res.json({ ok: true, id });
   } catch (err) {
-    console.error('Send proxy error:', err);
+    console.error('Send error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -63,11 +139,26 @@ app.get('/api/v1/poll', async (req: Request, res: Response) => {
       return;
     }
 
-    const response = await fetch(`${EXTERNAL_AI_BASE}/api/poll?id=${encodeURIComponent(id)}`);
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const record = chatStore.get(id);
+    if (!record) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+
+    if (record.status === 'done' && record.reply != null) {
+      res.json({ reply: record.reply });
+      return;
+    }
+
+    if (record.status === 'error') {
+      res.json({ error: record.error || 'generation failed' });
+      return;
+    }
+
+    // 仍在生成中
+    res.json({ error: 'nf' });
   } catch (err) {
-    console.error('Poll proxy error:', err);
+    console.error('Poll error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
