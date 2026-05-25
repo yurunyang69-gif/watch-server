@@ -1,6 +1,6 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-const appName = process.env.COZE_PROJECT_NAME || process.env.EXPO_PUBLIC_COZE_PROJECT_NAME || '雨润Claw';
+const appName = '雨润Claw';
 const projectId = process.env.COZE_PROJECT_ID || process.env.EXPO_PUBLIC_COZE_PROJECT_ID;
 const slugAppName = projectId ? `app${projectId}` : 'myapp';
 
@@ -66,6 +66,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           "microphonePermission": `雨润Claw需要访问麦克风以进行语音识别。`
         }
+      ],
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
       ]
     ],
     "android": {
@@ -77,9 +83,15 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       "intentFilters": [
         {
           "action": "MAIN",
-          "category": ["LAUNCHER"],
-          "autoVerify": true
+          "category": ["LAUNCHER"]
         }
+      ],
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "experiments": {
