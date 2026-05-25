@@ -2,6 +2,7 @@ import express, { type Request, type Response } from "express";
 import cors from "cors";
 import multer from "multer";
 import { ASRClient, LLMClient, Config, HeaderUtils } from "coze-coding-dev-sdk";
+import { getSupabaseClient } from "./storage/database/supabase-client.js";
 
 const app = express();
 const port = process.env.PORT || 9091;
@@ -14,7 +15,7 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// 内存存储：对话状态
+// 内存存储：对话生成状态（临时状态，不持久化）
 interface ChatRecord {
   id: string;
   status: 'pending' | 'done' | 'error';
@@ -24,10 +25,6 @@ interface ChatRecord {
 }
 
 const chatStore = new Map<string, ChatRecord>();
-
-// 全局对话历史（简单上下文记忆）
-const conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-const MAX_HISTORY = 20;
 
 // 清理过期记录（1小时）
 setInterval(() => {
@@ -46,13 +43,47 @@ app.get('/api/v1/health', (req, res) => {
 });
 
 /**
+ * 查询历史消息
+ * GET /api/v1/history
+ * Query: { device_id: string }
+ */
+app.get('/api/v1/history', async (req: Request, res: Response) => {
+  try {
+    const { device_id } = req.query;
+    if (!device_id || typeof device_id !== 'string') {
+      res.status(400).json({ error: 'device_id is required' });
+      return;
+    }
+
+    const client = getSupabaseClient();
+    const { data, error } = await client
+      .from('chat_messages')
+      .select('id, type, text, created_at')
+      .eq('device_id', device_id)
+      .order('created_at', { ascending: true })
+      .limit(200);
+
+    if (error) {
+      console.error('History query error:', error);
+      res.status(500).json({ error: 'Failed to load history' });
+      return;
+    }
+
+    res.json({ messages: data || [] });
+  } catch (err) {
+    console.error('History error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
  * 发送消息到AI服务
  * POST /api/v1/send
- * Body: { text: string }
+ * Body: { text: string, device_id: string }
  */
 app.post('/api/v1/send', async (req: Request, res: Response) => {
   try {
-    const { text } = req.body;
+    const { text, device_id } = req.body;
     if (!text || typeof text !== 'string') {
       res.status(400).json({ error: 'text is required' });
       return;
@@ -65,38 +96,64 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
       createdAt: Date.now(),
     });
 
-    // 保存用户消息到历史
-    conversationHistory.push({ role: 'user', content: text });
-    if (conversationHistory.length > MAX_HISTORY) {
-      conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY);
+    // 保存用户消息到数据库
+    const client = getSupabaseClient();
+    const { error: insertError } = await client.from('chat_messages').insert({
+      device_id: device_id || 'unknown',
+      type: 'user',
+      text,
+    });
+    if (insertError) {
+      console.error('Insert user message error:', insertError);
     }
 
     // 后台异步调用LLM生成回复
     const generateReply = async () => {
       try {
+        // 查询历史消息作为上下文
+        const { data: historyData, error: historyError } = await client
+          .from('chat_messages')
+          .select('type, text')
+          .eq('device_id', device_id || 'unknown')
+          .order('created_at', { ascending: true })
+          .limit(20);
+
+        if (historyError) {
+          console.error('History fetch error:', historyError);
+        }
+
+        const historyMessages = (historyData || []).map((h: any) => ({
+          role: h.type === 'user' ? 'user' as const : 'assistant' as const,
+          content: h.text,
+        }));
+
         const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
         const config = new Config();
-        const client = new LLMClient(config, customHeaders);
+        const llmClient = new LLMClient(config, customHeaders);
 
         const messages = [
           {
             role: 'system' as const,
             content: '你是小艺Claw，一位贴心的腕上AI助手。请用简洁、友好、口语化的中文回复用户，适合在手表小屏幕上阅读。回复控制在100字以内。',
           },
-          ...conversationHistory.map(h => ({ role: h.role, content: h.content })),
+          ...historyMessages,
         ];
 
-        const response = await client.invoke(messages, {
+        const response = await llmClient.invoke(messages, {
           model: 'doubao-seed-2-0-lite-260215',
           temperature: 0.8,
         });
 
         const reply = response.content || '抱歉，我没听懂，请再说一遍。';
 
-        // 保存AI回复到历史
-        conversationHistory.push({ role: 'assistant', content: reply });
-        if (conversationHistory.length > MAX_HISTORY) {
-          conversationHistory.splice(0, conversationHistory.length - MAX_HISTORY);
+        // 保存AI回复到数据库
+        const { error: aiInsertError } = await client.from('chat_messages').insert({
+          device_id: device_id || 'unknown',
+          type: 'ai',
+          text: reply,
+        });
+        if (aiInsertError) {
+          console.error('Insert AI message error:', aiInsertError);
         }
 
         chatStore.set(id, {

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   View,
   Text,
@@ -6,12 +7,16 @@ import {
   TouchableOpacity,
   Animated,
   Keyboard,
+  TextInput,
+  Platform,
 } from 'react-native';
 import { Audio, AudioMode } from 'expo-av';
 import { Screen } from '@/components/Screen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontAwesome6 } from '@expo/vector-icons';
 import { createFormDataFile } from '@/utils';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
 
 const EXPO_PUBLIC_BACKEND_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || '';
 const API_BASE = `${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1`;
@@ -31,27 +36,79 @@ function formatTime(date: Date): string {
   return `${h}:${m}`;
 }
 
+const DEVICE_ID_KEY = 'xiao_claw_device_id';
+
 export default function ChatPage() {
   const insets = useSafeAreaInsets();
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      type: 'ai',
-      text: '您好！我是小艺Claw，您的腕上AI助手。抬腕即可与我对话，今天有什么可以帮您的？',
-      timestamp: formatTime(new Date()),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [appStatus, setAppStatus] = useState<AppStatus>('connected');
   const [isRecording, setIsRecording] = useState(false);
-  const [recordingText, setRecordingText] = useState('');
+  const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [deviceId, setDeviceId] = useState<string>('');
+  const [hasLoadedHistory, setHasLoadedHistory] = useState(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pollCountRef = useRef(0);
+  const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSyncCountRef = useRef(0);
+
+  // 初始化设备ID
+  useEffect(() => {
+    const initDeviceId = async () => {
+      try {
+        let id = await AsyncStorage.getItem(DEVICE_ID_KEY);
+        if (!id) {
+          id = Crypto.randomUUID();
+          await AsyncStorage.setItem(DEVICE_ID_KEY, id);
+        }
+        setDeviceId(id);
+      } catch {
+        const fallback = Crypto.randomUUID();
+        setDeviceId(fallback);
+      }
+    };
+    initDeviceId();
+  }, []);
+
+  // 加载历史消息
+  const loadHistory = useCallback(async () => {
+    if (!deviceId) return;
+    try {
+      /**
+       * 服务端文件：server/src/index.ts
+       * 接口：GET /api/v1/history
+       * Query 参数：device_id: string
+       */
+      const res = await fetch(`${API_BASE}/history?device_id=${encodeURIComponent(deviceId)}`);
+      if (!res.ok) throw new Error('Failed to load history');
+      const data = await res.json();
+      if (data.messages && Array.isArray(data.messages)) {
+        const loaded: Message[] = data.messages.map((m: any) => ({
+          id: m.id,
+          type: m.type,
+          text: m.text,
+          timestamp: m.timestamp ? formatTime(new Date(m.timestamp)) : formatTime(new Date()),
+        }));
+        setMessages(loaded);
+      }
+    } catch (err) {
+      console.error('Load history error', err);
+    } finally {
+      setHasLoadedHistory(true);
+    }
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (deviceId && !hasLoadedHistory) {
+      loadHistory();
+    }
+  }, [deviceId, hasLoadedHistory, loadHistory]);
 
   // 脉冲动画
   useEffect(() => {
@@ -111,12 +168,12 @@ export default function ChatPage() {
       } as AudioMode);
 
       const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+        Audio.RecordingOptionsPresets.LOW_QUALITY
       );
       recordingRef.current = recording;
       setIsRecording(true);
       setAppStatus('listening');
-      setRecordingText('');
+      setInputText('');
     } catch (err) {
       console.error('Failed to start recording', err);
       setAppStatus('error');
@@ -126,11 +183,13 @@ export default function ChatPage() {
   // 停止录音并上传识别
   const stopRecording = useCallback(async () => {
     setIsRecording(false);
+    setIsTranscribing(true);
     setAppStatus('waiting');
 
     try {
       const recording = recordingRef.current;
       if (!recording) {
+        setIsTranscribing(false);
         setAppStatus('connected');
         return;
       }
@@ -140,6 +199,7 @@ export default function ChatPage() {
       recordingRef.current = null;
 
       if (!uri) {
+        setIsTranscribing(false);
         setAppStatus('connected');
         return;
       }
@@ -165,25 +225,23 @@ export default function ChatPage() {
 
       const data = await response.json();
       if (data.text) {
-        setRecordingText(data.text);
-      } else {
-        setRecordingText('');
-        setAppStatus('connected');
+        setInputText(data.text);
       }
     } catch (err) {
       console.error('Failed to stop/upload recording', err);
-      setRecordingText('');
+    } finally {
+      setIsTranscribing(false);
       setAppStatus('connected');
     }
   }, []);
 
   // 发送消息
   const handleSend = useCallback(async () => {
-    const text = recordingText.trim();
+    const text = inputText.trim();
     if (!text || isSending) return;
 
     setIsSending(true);
-    setRecordingText('');
+    setInputText('');
     setIsTyping(true);
     setAppStatus('waiting');
 
@@ -199,12 +257,12 @@ export default function ChatPage() {
       /**
        * 服务端文件：server/src/index.ts
        * 接口：POST /api/v1/send
-       * Body 参数：text: string
+       * Body 参数：text: string, device_id: string
        */
       const sendRes = await fetch(`${API_BASE}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, device_id: deviceId }),
       });
 
       if (!sendRes.ok) {
@@ -279,13 +337,56 @@ export default function ChatPage() {
       };
       setMessages(prev => [...prev, errorMsg]);
     }
-  }, [recordingText, isSending]);
+  }, [inputText, isSending, deviceId]);
+
+  // 定时同步历史消息（多端准实时同步）
+  const syncHistory = useCallback(async () => {
+    if (!deviceId || isSending || isTyping) return;
+    try {
+      const res = await fetch(`${API_BASE}/history?device_id=${encodeURIComponent(deviceId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.messages && Array.isArray(data.messages)) {
+        const dbCount = data.messages.length;
+        if (dbCount > lastSyncCountRef.current) {
+          lastSyncCountRef.current = dbCount;
+          const loaded: Message[] = data.messages.map((m: any) => ({
+            id: m.id,
+            type: m.type,
+            text: m.text,
+            timestamp: m.timestamp ? formatTime(new Date(m.timestamp)) : formatTime(new Date()),
+          }));
+          setMessages(loaded);
+        }
+      }
+    } catch {
+      // 静默忽略同步失败
+    }
+  }, [deviceId, isSending, isTyping]);
+
+  // 页面聚焦时刷新历史
+  useFocusEffect(
+    useCallback(() => {
+      loadHistory();
+      // 启动定时同步（每5秒）
+      syncTimerRef.current = setInterval(syncHistory, 5000);
+      return () => {
+        if (syncTimerRef.current) {
+          clearInterval(syncTimerRef.current);
+          syncTimerRef.current = null;
+        }
+      };
+    }, [loadHistory, syncHistory])
+  );
 
   // 清理轮询定时器
   useEffect(() => {
     return () => {
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
+      }
+      if (syncTimerRef.current) {
+        clearInterval(syncTimerRef.current);
       }
       if (recordingRef.current) {
         recordingRef.current.stopAndUnloadAsync().catch(() => { /* ignore */ });
@@ -413,6 +514,16 @@ export default function ChatPage() {
           </View>
         )}
 
+        {/* 语音识别中指示器 */}
+        {isTranscribing && (
+          <View className="h-[30px] flex items-center justify-center shrink-0">
+            <View className="flex flex-row items-center gap-1">
+              <FontAwesome6 name="spinner" size={10} color="#888888" />
+              <Text className="text-[10px] text-[#888888]">语音识别中…</Text>
+            </View>
+          </View>
+        )}
+
         {/* 底部输入栏 */}
         <View
           className="px-4 pt-2 pb-3 flex flex-row items-center gap-2 shrink-0"
@@ -423,50 +534,58 @@ export default function ChatPage() {
             activeOpacity={0.8}
             onPressIn={startRecording}
             onPressOut={stopRecording}
-            disabled={isSending}
-            className="flex-1 h-11 rounded-[22px] flex flex-row items-center justify-center gap-2 border"
+            disabled={isSending || isTranscribing}
+            className="w-11 h-11 rounded-full items-center justify-center shrink-0"
             style={{
               backgroundColor: isRecording ? '#C62828' : '#1A1A1A',
+              borderWidth: 1,
               borderColor: isRecording ? '#C62828' : '#333333',
             }}
           >
             <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
               <FontAwesome6
                 name="microphone"
-                size={14}
+                size={16}
                 color={isRecording ? '#ffffff' : '#888888'}
               />
             </Animated.View>
-            <Text
-              className="text-sm"
-              style={{ color: isRecording ? '#ffffff' : '#888888' }}
-              numberOfLines={1}
-            >
-              {isRecording
-                ? '正在听…'
-                : recordingText
-                ? recordingText.length > 12
-                  ? recordingText.slice(0, 12) + '…'
-                  : recordingText
-                : '按住说话'}
-            </Text>
           </TouchableOpacity>
+
+          {/* 文本输入框 */}
+          <TextInput
+            className="flex-1 h-11 rounded-[22px] px-4 text-sm text-white"
+            style={{
+              backgroundColor: '#1A1A1A',
+              borderWidth: 1,
+              borderColor: '#333333',
+              lineHeight: Platform.OS === 'ios' ? 20 : undefined,
+            }}
+            placeholder="按住麦克风说话，或输入文字…"
+            placeholderTextColor="#666666"
+            value={inputText}
+            onChangeText={setInputText}
+            editable={!isSending && !isTranscribing}
+            multiline={false}
+            returnKeyType="send"
+            onSubmitEditing={handleSend}
+            selectionColor="#1A73E8"
+          />
 
           {/* 发送按钮 */}
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={handleSend}
-            disabled={!recordingText.trim() || isSending}
-            className="w-11 h-11 rounded-full items-center justify-center"
+            disabled={!inputText.trim() || isSending}
+            className="w-11 h-11 rounded-full items-center justify-center shrink-0"
             style={{
               backgroundColor:
-                recordingText.trim() && !isSending ? '#1A73E8' : '#333333',
+                inputText.trim() && !isSending ? '#1A73E8' : '#333333',
             }}
           >
             <FontAwesome6
               name="arrow-right"
               size={16}
-              color={recordingText.trim() && !isSending ? '#ffffff' : '#888888'}
+              color={inputText.trim() && !isSending ? '#ffffff' : '#888888'}
             />
           </TouchableOpacity>
         </View>
