@@ -402,7 +402,7 @@ export default function ChatPage() {
         style={{ maxWidth: '90%', marginBottom: 8 }}
       >
         {!isUser && (
-          <Text className="text-[9px] text-accent mb-0.5 ml-1">小艺Claw</Text>
+          <Text className="text-[9px] text-accent mb-0.5 ml-1">雨润Claw</Text>
         )}
         <View
           className={`px-3 py-2 rounded-xl ${
@@ -451,10 +451,10 @@ export default function ChatPage() {
         {/* 顶部标题栏 */}
         <View className="h-10 flex flex-col items-center justify-center shrink-0">
           <Text className="text-base font-bold text-white tracking-wide">
-            小艺 Claw
+            雨润 Claw
           </Text>
           <Text className="text-[9px] text-[#888888] leading-tight mt-0.5">
-            抬腕说话 · AI秒回
+            Adam's AI · 抬腕说话
           </Text>
         </View>
 
@@ -473,26 +473,41 @@ export default function ChatPage() {
         </View>
 
         {/* 聊天记录区 */}
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          renderItem={renderMessage}
-          keyExtractor={item => item.id}
-          contentContainerStyle={{
-            paddingHorizontal: 16,
-            paddingTop: 8,
-            paddingBottom: 8,
-            flexGrow: 1,
-            justifyContent: 'flex-end',
-          }}
-          onContentSizeChange={() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-          }}
-          onLayout={() => {
-            flatListRef.current?.scrollToEnd({ animated: false });
-          }}
-          className="flex-1"
-        />
+        <View className="flex-1 relative">
+          {/* 雨润水印背景 */}
+          <View className="absolute inset-0 items-center justify-center pointer-events-none" style={{ zIndex: 0 }}>
+            <Text
+              className="text-white/[0.03] font-bold rotate-[-15deg]"
+              style={{ fontSize: 56, letterSpacing: 8 }}
+            >
+              雨润
+            </Text>
+          </View>
+
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            renderItem={renderMessage}
+            keyExtractor={item => item.id}
+            contentContainerStyle={{
+              paddingHorizontal: 16,
+              paddingTop: 8,
+              paddingBottom: 8,
+              flexGrow: 1,
+              justifyContent: 'flex-end',
+            }}
+            onContentSizeChange={() => {
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }}
+            onLayout={() => {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }}
+            nestedScrollEnabled={true}
+            scrollEventThrottle={16}
+            className="flex-1"
+            style={{ zIndex: 1 }}
+          />
+        </View>
 
         {/* 输入状态指示器 */}
         {isTyping && (
