@@ -18,6 +18,7 @@ import Markdown from 'react-native-markdown-display';
 import { createFormDataFile } from '@/utils';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
+import * as DocumentPicker from 'expo-document-picker';
 
 const EXPO_PUBLIC_BACKEND_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_BASE_URL || '';
 const API_BASE = `${EXPO_PUBLIC_BACKEND_BASE_URL}/api/v1`;
@@ -52,6 +53,7 @@ export default function ChatPage() {
   const [deviceId, setDeviceId] = useState<string>('');
   const [hasLoadedHistory, setHasLoadedHistory] = useState(false);
   const [docMode, setDocMode] = useState(false);
+  const [isUploadingDoc, setIsUploadingDoc] = useState(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -233,6 +235,61 @@ export default function ChatPage() {
       console.error('Failed to stop/upload recording', err);
     } finally {
       setIsTranscribing(false);
+      setAppStatus('connected');
+    }
+  }, []);
+
+  // 文档上传与解析
+  const handleUploadDoc = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'text/plain',
+          'text/markdown',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/pdf',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/csv',
+          'application/json',
+        ],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      setIsUploadingDoc(true);
+      setAppStatus('waiting');
+
+      const formData = new FormData();
+      const docFile = await createFormDataFile(asset.uri, asset.name, asset.mimeType || 'application/octet-stream');
+      formData.append('doc', docFile as any);
+
+      /**
+       * 服务端文件：server/src/index.ts
+       * 接口：POST /api/v1/upload-doc
+       * Body：FormData，字段名 doc（文档文件）
+       */
+      const response = await fetch(`${API_BASE}/upload-doc`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || 'Document upload failed');
+      }
+
+      const data = await response.json();
+      if (data.text) {
+        setInputText(data.text);
+      }
+    } catch (err) {
+      console.error('Upload doc error:', err);
+    } finally {
+      setIsUploadingDoc(false);
       setAppStatus('connected');
     }
   }, []);
@@ -575,11 +632,40 @@ export default function ChatPage() {
           </View>
         )}
 
+        {/* 文档上传中指示器 */}
+        {isUploadingDoc && (
+          <View className="h-[30px] flex items-center justify-center shrink-0">
+            <View className="flex flex-row items-center gap-1">
+              <FontAwesome6 name="spinner" size={10} color="#888888" />
+              <Text className="text-[10px] text-[#888888]">文档解析中…</Text>
+            </View>
+          </View>
+        )}
+
         {/* 底部输入栏 */}
         <View
           className="px-4 pt-2 pb-3 flex flex-row items-center gap-2 shrink-0"
           style={{ paddingBottom: insets.bottom + 12 }}
         >
+          {/* 文档上传按钮 */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={handleUploadDoc}
+            disabled={isSending || isTranscribing || isUploadingDoc}
+            className="w-9 h-9 rounded-full items-center justify-center shrink-0"
+            style={{
+              backgroundColor: '#1A1A1A',
+              borderWidth: 1,
+              borderColor: '#333333',
+            }}
+          >
+            <FontAwesome6
+              name="file-arrow-up"
+              size={14}
+              color="#888888"
+            />
+          </TouchableOpacity>
+
           {/* 麦克风按钮 */}
           <TouchableOpacity
             activeOpacity={0.8}

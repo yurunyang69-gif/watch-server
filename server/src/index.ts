@@ -43,6 +43,86 @@ app.get('/api/v1/health', (req, res) => {
 });
 
 /**
+ * 文档上传与解析
+ * POST /api/v1/upload-doc
+ * Body: FormData，字段名 doc（文档文件）
+ */
+app.post('/api/v1/upload-doc', upload.single('doc'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'No document uploaded' });
+      return;
+    }
+
+    const { originalname, mimetype, buffer } = req.file;
+    const ext = originalname.split('.').pop()?.toLowerCase() || '';
+    let text = '';
+
+    if (ext === 'txt' || ext === 'md' || ext === 'json' || ext === 'js' || ext === 'ts' || ext === 'jsx' || ext === 'tsx' || ext === 'py' || ext === 'css' || ext === 'html') {
+      text = buffer.toString('utf-8');
+    } else if (ext === 'docx') {
+      const mammoth = await import('mammoth');
+      const result = await mammoth.extractRawText({ buffer });
+      text = result.value;
+    } else if (ext === 'pdf') {
+      try {
+        const { createRequire } = await import('module');
+        const require = createRequire(import.meta.url);
+        const pdfParse = require('pdf-parse');
+        const result = await pdfParse(buffer);
+        text = result.text;
+      } catch (pdfErr) {
+        console.error('PDF parse error:', pdfErr);
+        res.status(500).json({ error: 'PDF parsing failed. Please convert to TXT or DOCX.' });
+        return;
+      }
+    } else if (ext === 'csv') {
+      try {
+        const csvText = buffer.toString('utf-8');
+        const lines = csvText.split('\n').map(line => line.replace(/\r/g, '')).filter(line => line.trim());
+        text = lines.map(line => line.split(',').join('\t')).join('\n');
+      } catch (csvErr) {
+        console.error('CSV parse error:', csvErr);
+        res.status(500).json({ error: 'CSV parsing failed' });
+        return;
+      }
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      try {
+        const xlsx = await import('xlsx');
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetNames = workbook.SheetNames;
+        const lines: string[] = [];
+        for (const sheetName of sheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          const json = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+          lines.push(`--- Sheet: ${sheetName} ---`);
+          for (const row of json as unknown[][]) {
+            lines.push((row as unknown[]).join('\t'));
+          }
+        }
+        text = lines.join('\n');
+      } catch (xlsxErr) {
+        console.error('Excel parse error:', xlsxErr);
+        res.status(500).json({ error: 'Excel parsing failed. Please convert to TXT.' });
+        return;
+      }
+    } else {
+      res.status(400).json({ error: `Unsupported file type: ${ext}. Supported: txt, md, docx, pdf, xlsx, csv, json, code files` });
+      return;
+    }
+
+    // 截断过长的文本（保留前15000字符，约5000汉字）
+    const maxLen = 15000;
+    const truncated = text.length > maxLen ? text.slice(0, maxLen) + '\n\n[文档内容过长，已截断]' : text;
+
+    res.json({ text: truncated, title: originalname });
+  } catch (err) {
+    console.error('Upload doc error:', err);
+    res.status(500).json({ error: 'Failed to parse document' });
+  }
+});
+
+/**
  * 查询历史消息
  * GET /api/v1/history
  * Query: { device_id: string }
