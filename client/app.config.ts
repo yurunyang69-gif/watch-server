@@ -67,6 +67,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           "microphonePermission": `Adam Claw需要访问麦克风以录制视频声音。`,
           "recordAudioAndroid": true
         }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": `腕上AI助手需要访问麦克风以进行语音识别。`
+        }
       ]
     ],
     "experiments": {

@@ -41,8 +41,8 @@
       --default: oklch(94% 0.001 286.375);
       --default-foreground: var(--eclipse);
 
-      --accent: oklch(0.6204 0.195 253.83);
-      --accent-foreground: var(--snow);
+      --accent: #1A73E8;
+      --accent-foreground: #ffffff;
 
       /* Form Fields */
       --field-background: var(--white);
@@ -51,8 +51,8 @@
       --field-border: transparent; /* no border by default on form fields */
 
       /* Status Colors */
-      --success: oklch(0.7329 0.1935 150.81);
-      --success-foreground: var(--eclipse);
+      --success: #43A047;
+      --success-foreground: #ffffff;
 
       --warning: oklch(0.7819 0.1585 72.33);
       --warning-foreground: var(--eclipse);
@@ -116,8 +116,8 @@
       --warning: oklch(0.8203 0.1388 76.34);
       --warning-foreground: var(--eclipse);
 
-      --danger: oklch(0.594 0.1967 24.63);
-      --danger-foreground: var(--snow);
+      --danger: #C62828;
+      --danger-foreground: #ffffff;
 
       /* Component Colors */
       --segment: oklch(0.3964 0.01 285.93);

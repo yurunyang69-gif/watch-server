@@ -5,7 +5,7 @@ import { Uniwind } from 'uniwind'
 // system: 跟随系统变化
 // light: 固定为 light 主题
 // dark: 固定为 dark 主题
-const DEFAULT_THEME: 'system' | 'light' | 'dark' = 'system'
+const DEFAULT_THEME: 'system' | 'light' | 'dark' = 'dark' // 手表应用固定暗色主题
 
 const WebOnlyColorSchemeUpdater = function ({ children }: { children?: ReactNode }) {
   useEffect(() => {
