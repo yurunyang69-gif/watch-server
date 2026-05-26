@@ -1,6 +1,6 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-const appName = '雨润Claw';
+const appName = process.env.COZE_PROJECT_NAME || process.env.EXPO_PUBLIC_COZE_PROJECT_NAME || '雨润Claw';
 const projectId = process.env.COZE_PROJECT_ID || process.env.EXPO_PUBLIC_COZE_PROJECT_ID;
 const slugAppName = projectId ? `app${projectId}` : 'myapp';
 
@@ -14,7 +14,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -66,12 +66,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           "microphonePermission": `雨润Claw需要访问麦克风以进行语音识别。`
         }
-      ],
-      [
-        "expo-document-picker",
-        {
-          "iCloudContainerEnvironment": "Production"
-        }
       ]
     ],
     "android": {
@@ -80,13 +74,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#ffffff"
       },
       "package": `com.anonymous.x${projectId || '0'}`,
-      "intentFilters": [],
-      "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.CAMERA",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+      "intentFilters": [
+        {
+          "action": "MAIN",
+          "category": ["LAUNCHER"],
+          "autoVerify": true
+        }
       ]
     },
     "experiments": {
