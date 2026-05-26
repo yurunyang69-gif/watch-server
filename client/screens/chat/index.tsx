@@ -10,6 +10,7 @@ import {
   TextInput,
   Platform,
 } from 'react-native';
+import { Link } from 'expo-router';
 import { Audio, AudioMode } from 'expo-av';
 import { Screen } from '@/components/Screen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -536,7 +537,7 @@ export default function ChatPage() {
           </Text>
         </View>
 
-        {/* 状态栏 + 文档模式切换 */}
+        {/* 状态栏 + 模式切换 */}
         <View className="h-5 flex flex-row items-center justify-center shrink-0 gap-2">
           <View className="flex flex-row items-center gap-1">
             <FontAwesome6
@@ -548,6 +549,22 @@ export default function ChatPage() {
               {statusDisplay.text}
             </Text>
           </View>
+          <Link href="/knowledge-base" asChild>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              className="flex flex-row items-center gap-1 px-2 py-0.5 rounded-full"
+              style={{ backgroundColor: 'rgba(26,115,232,0.2)' }}
+            >
+              <FontAwesome6
+                name="book"
+                size={8}
+                color="#1A73E8"
+              />
+              <Text style={{ color: '#1A73E8', fontSize: 9 }}>
+                知识库
+              </Text>
+            </TouchableOpacity>
+          </Link>
           <TouchableOpacity
             onPress={() => setDocMode(v => !v)}
             activeOpacity={0.7}

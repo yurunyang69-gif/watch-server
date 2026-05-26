@@ -23,6 +23,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ title: "" }} />
+        <Stack.Screen name="knowledge-base" options={{ title: "知识库" }} />
       </Stack>
       <Toast />
     </Provider>

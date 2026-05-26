@@ -101,43 +101,58 @@ const KeyboardAwareScrollable = ({
   // 合并 paddingBottom (安全区 + 额外留白)
   const enhancedContentStyle = [{ ...merged, paddingBottom: currentPB + extraPadding }];
 
-  // 基础配置 props，用于传递给 KeyboardAware 组件
+  // 提取需要的 props 并明确类型，避免 unknown 类型与具体枚举冲突
+  const ksp: 'handled' | 'always' | 'never' | undefined = childAttrs['keyboardShouldPersistTaps'] as any;
+  const kdm: 'none' | 'interactive' | 'on-drag' | undefined = childAttrs['keyboardDismissMode'] as any;
+  const cIAB: 'automatic' | 'never' | undefined = childAttrs['contentInsetAdjustmentBehavior'] as any;
+
+  // 移除会被重新处理的 keys，避免类型冲突
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { keyboardShouldPersistTaps: _ksp, keyboardDismissMode: _kdm, contentInsetAdjustmentBehavior: _ciab, ...safeChildAttrs } = childAttrs as Record<string, unknown>;
+
   const commonProps = {
-    ...childAttrs,
+    ...safeChildAttrs,
     contentContainerStyle: enhancedContentStyle,
-    keyboardShouldPersistTaps: childAttrs['keyboardShouldPersistTaps'] ?? 'handled',
-    keyboardDismissMode: childAttrs['keyboardDismissMode'] ?? 'on-drag',
     enableOnAndroid: true,
-    // 类似于原代码中的 setTimeout/scrollToEnd 逻辑，这里设置额外的滚动高度确保输入框可见
     extraHeight: 100,
-    // 禁用自带的 ScrollView 自动 inset，由外部 padding 控制
     enableAutomaticScroll: true,
-    ...(Platform.OS === 'ios'
-      ? { contentInsetAdjustmentBehavior: childAttrs['contentInsetAdjustmentBehavior'] ?? contentInsetBehaviorIOS }
-      : {}),
   };
 
   const t = (element as React.ReactElement).type;
 
   // 根据组件类型返回对应的 KeyboardAware 版本
-  // 注意：不再使用 KeyboardAvoidingView，直接替换为增强版 ScrollView
   if (t === ScrollView) {
-    return <KeyboardAwareScrollView {...commonProps} />;
+    return <KeyboardAwareScrollView
+      {...(commonProps as any)}
+      keyboardDismissMode={kdm ?? 'on-drag'}
+      keyboardShouldPersistTaps={ksp ?? 'handled'}
+      contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? (cIAB ?? 'automatic') : undefined}
+    />;
   }
 
   if (t === FlatList) {
-    return <KeyboardAwareFlatList {...commonProps} />;
+    return <KeyboardAwareFlatList
+      {...(commonProps as any)}
+      keyboardDismissMode={kdm ?? 'on-drag'}
+      keyboardShouldPersistTaps={ksp ?? 'handled'}
+      contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? (cIAB ?? 'automatic') : undefined}
+    />;
   }
 
   if (t === SectionList) {
-    return <KeyboardAwareSectionList {...commonProps} />;
+    return <KeyboardAwareSectionList
+      {...(commonProps as any)}
+      keyboardDismissMode={kdm ?? 'on-drag'}
+      keyboardShouldPersistTaps={ksp ?? 'handled'}
+      contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? (cIAB ?? 'automatic') : undefined}
+    />;
   }
 
   // 理论上不应运行到这里，如果是非标准组件则原样返回，仅修改样式
   return React.cloneElement(element, {
     contentContainerStyle: enhancedContentStyle,
-    keyboardShouldPersistTaps: childAttrs['keyboardShouldPersistTaps'] ?? 'handled',
-    keyboardDismissMode: childAttrs['keyboardDismissMode'] ?? 'on-drag',
+    keyboardShouldPersistTaps: ksp ?? 'handled',
+    keyboardDismissMode: kdm ?? 'on-drag',
   });
 };
 

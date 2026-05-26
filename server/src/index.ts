@@ -1,7 +1,8 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
 import multer from "multer";
-import { ASRClient, LLMClient, Config, HeaderUtils, SearchClient } from "coze-coding-dev-sdk";
+import crypto from "crypto";
+import { ASRClient, LLMClient, Config, HeaderUtils, SearchClient, EmbeddingClient } from "coze-coding-dev-sdk";
 import { getSupabaseClient } from "./storage/database/supabase-client.js";
 
 const app = express();
@@ -66,11 +67,10 @@ app.post('/api/v1/upload-doc', upload.single('doc'), async (req: Request, res: R
       text = result.value;
     } else if (ext === 'pdf') {
       try {
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const pdfParse = require('pdf-parse');
-        const result = await pdfParse(buffer);
-        text = result.text;
+        const { PDFParse } = await import('pdf-parse');
+        const parser = new PDFParse({ data: buffer });
+        const textResult = await (parser as any).getText();
+        text = textResult.pages.map((p: any) => p.text).join('\n');
       } catch (pdfErr) {
         console.error('PDF parse error:', pdfErr);
         res.status(500).json({ error: 'PDF parsing failed. Please convert to TXT or DOCX.' });
@@ -213,6 +213,41 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
         const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
         const config = new Config();
 
+        // ========== 知识库检索（关键词匹配）==========
+        let knowledgeContext = '';
+        try {
+          const maxResults = 3;
+          // 使用 Supabase RPC 函数或直接查询进行关键词匹配
+          const queryText = text.toLowerCase();
+          const queryWords = queryText.split(/\s+/).filter((w: string) => w.length > 1);
+          
+          const { data: kbData } = await client
+            .from('knowledge_documents')
+            .select('id, title, content')
+            .eq('device_id', device_id || 'unknown')
+            .limit(20);
+          
+          if (kbData && kbData.length > 0) {
+            const scoredDocs = (kbData as any[])
+              .map((doc: any) => {
+                const contentLower = doc.content.toLowerCase();
+                const score = queryWords.filter((w: string) => contentLower.includes(w)).length;
+                return { ...doc, score };
+              })
+              .filter((d: any) => d.score > 0)
+              .sort((a: any, b: any) => b.score - a.score)
+              .slice(0, maxResults);
+            
+            if (scoredDocs.length > 0) {
+              knowledgeContext = scoredDocs
+                .map((doc: any, i: number) => `[知识库文档${i + 1}: ${doc.title}]\n${doc.content.slice(0, 1500)}`)
+                .join('\n\n');
+            }
+          }
+        } catch (kbErr) {
+          console.warn('Knowledge base search failed:', kbErr);
+        }
+
         // ========== 网页资料搜索 ==========
         let searchContext = '';
         try {
@@ -239,6 +274,9 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
         }
         if (searchContext) {
           systemPrompt += '\n\n【搜索增强】以下是从互联网搜索到的最新参考资料，请优先结合这些资料回答用户问题：' + searchContext;
+        }
+        if (knowledgeContext) {
+          systemPrompt += '\n\n【个人知识库】以下是从你的个人知识库中检索到的相关资料，请优先结合这些资料回答用户：\n' + knowledgeContext + '\n\n请结合上述知识库内容，给出专业、准确的回答。如果知识库内容不相关，请忽略。';
         }
 
         const messages = [
@@ -357,6 +395,289 @@ app.post('/api/v1/transcribe', upload.single('audio'), async (req: Request, res:
   } catch (err) {
     console.error('ASR error:', err);
     res.status(500).json({ error: 'Speech recognition failed' });
+  }
+});
+
+// ============== 知识库管理 ==============
+
+/**
+ * 将长文本按段落分块
+ */
+function splitIntoChunks(text: string, maxChars: number): string[] {
+  // 按换行分割成段落
+  const paragraphs = text.split(/\n+/).filter(p => p.trim().length > 0);
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const para of paragraphs) {
+    if ((current + '\n' + para).length <= maxChars) {
+      current = current ? current + '\n' + para : para;
+    } else {
+      if (current) chunks.push(current);
+      // 如果单个段落就超过限制，按句子继续拆分
+      if (para.length > maxChars) {
+        const sentences = para.split(/(?<=[。！？.!?])/);
+        current = '';
+        for (const sent of sentences) {
+          if ((current + sent).length <= maxChars) {
+            current += sent;
+          } else {
+            if (current) chunks.push(current);
+            current = sent.length <= maxChars ? sent : sent.slice(0, maxChars);
+          }
+        }
+      } else {
+        current = para;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+/**
+ * 上传文档到知识库
+ * POST /api/v1/knowledge/upload
+ * Body: FormData, 字段名 doc（文档文件）
+ *        { name: string } - 文档名称
+ *        { device_id: string } - 设备ID
+ */
+app.post('/api/v1/knowledge/upload', upload.single('doc'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'No document uploaded' });
+      return;
+    }
+
+    const { originalname, mimetype, buffer } = req.file;
+    const docName = req.body.name || originalname;
+    const deviceId = req.body.device_id || 'unknown';
+    const ext = originalname.split('.').pop()?.toLowerCase() || '';
+    let text = '';
+
+    // 复用upload-doc的解析逻辑
+    if (ext === 'txt' || ext === 'md' || ext === 'json' || ext === 'js' || ext === 'ts' || ext === 'jsx' || ext === 'tsx' || ext === 'py' || ext === 'css' || ext === 'html') {
+      text = buffer.toString('utf-8');
+    } else if (ext === 'docx') {
+      const mammoth = await import('mammoth');
+      const result = await mammoth.extractRawText({ buffer });
+      text = result.value;
+    } else if (ext === 'pdf') {
+      try {
+        const { PDFParse } = await import('pdf-parse');
+        const parser = new PDFParse({ data: buffer });
+        const textResult = await (parser as any).getText();
+        text = textResult.pages.map((p: any) => p.text).join('\n');
+      } catch (pdfErr) {
+        console.error('PDF parse error:', pdfErr);
+        res.status(500).json({ error: 'PDF parsing failed' });
+        return;
+      }
+    } else if (ext === 'csv') {
+      const csvText = buffer.toString('utf-8');
+      const lines = csvText.split('\n').map(line => line.replace(/\r/g, '')).filter(line => line.trim());
+      text = lines.map(line => line.split(',').join('\t')).join('\n');
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      try {
+        const xlsx = await import('xlsx');
+        const workbook = xlsx.read(buffer, { type: 'buffer' });
+        const sheetNames = workbook.SheetNames;
+        const lines: string[] = [];
+        for (const sheetName of sheetNames) {
+          const worksheet = workbook.Sheets[sheetName];
+          const json = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+          lines.push(`--- Sheet: ${sheetName} ---`);
+          for (const row of json as unknown[][]) {
+            lines.push((row as unknown[]).join('\t'));
+          }
+        }
+        text = lines.join('\n');
+      } catch (xlsxErr) {
+        console.error('Excel parse error:', xlsxErr);
+        res.status(500).json({ error: 'Excel parsing failed' });
+        return;
+      }
+    } else {
+      res.status(400).json({ error: `Unsupported file type: ${ext}` });
+      return;
+    }
+
+    // 清理文本
+    text = text.replace(/\s+/g, ' ').trim();
+    if (text.length < 10) {
+      res.status(400).json({ error: 'Document content too short' });
+      return;
+    }
+
+    // 生成文档ID（用于关联所有分块）
+    const docId = crypto.randomUUID();
+
+    // 存储元数据行
+    const client = getSupabaseClient();
+    const { error: metaError } = await client.from('knowledge_documents').insert({
+      id: docId,
+      device_id: deviceId,
+      title: docName,
+      content: text.slice(0, 50000), // 限制内容长度
+    });
+
+    if (metaError) {
+      console.error('Knowledge metadata insert error:', metaError);
+      res.status(500).json({ error: 'Failed to save document metadata' });
+      return;
+    }
+
+    // 将文本分块（按段落或句子分割，每块约500字符）
+    const chunks = splitIntoChunks(text, 500);
+    console.log(`Split document into ${chunks.length} chunks`);
+
+    // 批量生成向量并插入分块（每批最多10个）
+    for (let i = 0; i < chunks.length; i += 10) {
+      const batch = chunks.slice(i, i + 10);
+      const records = [];
+
+      for (const chunk of batch) {
+        records.push({
+          id: crypto.randomUUID(),
+          device_id: deviceId,
+          title: docName,
+          content: chunk,
+          doc_id: docId,
+        });
+      }
+
+      const { error: chunkError } = await client.from('knowledge_documents').insert(records);
+      if (chunkError) {
+        console.error('Knowledge chunks insert error:', chunkError);
+      }
+    }
+
+    res.json({ id: docId, name: docName, charCount: text.length, chunkCount: chunks.length });
+  } catch (err) {
+    console.error('Knowledge upload error:', err);
+    res.status(500).json({ error: 'Failed to upload document' });
+  }
+});
+
+/**
+ * 获取知识库文档列表
+ * GET /api/v1/knowledge/list
+ * Query: { device_id: string }
+ */
+app.get('/api/v1/knowledge/list', async (req: Request, res: Response) => {
+  try {
+    const { device_id } = req.query;
+    if (!device_id || typeof device_id !== 'string') {
+      res.status(400).json({ error: 'device_id is required' });
+      return;
+    }
+
+    const client = getSupabaseClient();
+    // 只查询元数据行（doc_id为null），按创建时间倒序
+    const { data, error } = await client
+      .from('knowledge_documents')
+      .select('id, title, content, content_hash, doc_id, created_at')
+      .eq('device_id', device_id)
+      .is('doc_id', null)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Knowledge list error:', error);
+      res.status(500).json({ error: 'Failed to load knowledge base' });
+      return;
+    }
+
+    const documents = (data || []).map((doc: any) => ({
+      id: doc.id,
+      title: doc.title,
+      char_count: doc.content?.length || 0,
+      doc_type: "txt",
+      created_at: doc.created_at,
+    }));
+    res.json({ documents });
+  } catch (err) {
+    console.error('Knowledge list error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * 删除知识库文档
+ * DELETE /api/v1/knowledge/delete
+ * Query: { id: string, device_id: string }
+ */
+app.delete('/api/v1/knowledge/delete', async (req: Request, res: Response) => {
+  try {
+    const { id, device_id } = req.query;
+    if (!id || !device_id || typeof id !== 'string' || typeof device_id !== 'string') {
+      res.status(400).json({ error: 'id and device_id are required' });
+      return;
+    }
+
+    const client = getSupabaseClient();
+    // 删除元数据行和所有分块
+    await client.from('knowledge_documents').delete().eq('id', id).eq('device_id', device_id);
+    await client.from('knowledge_documents').delete().eq('doc_id', id).eq('device_id', device_id);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Knowledge delete error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * 搜索知识库
+ * GET /api/v1/knowledge/search
+ * Query: { q: string, device_id: string, limit?: number }
+ */
+app.get('/api/v1/knowledge/search', async (req: Request, res: Response) => {
+  try {
+    const { q, device_id, limit } = req.query;
+    if (!q || !device_id || typeof q !== 'string' || typeof device_id !== 'string') {
+      res.status(400).json({ error: 'q and device_id are required' });
+      return;
+    }
+
+    const client = getSupabaseClient();
+    const maxResults = Math.min(parseInt(limit as string) || 3, 5);
+
+    // 关键词匹配搜索
+    const { data: docs, error } = await client
+      .from('knowledge_documents')
+      .select('id, title, content')
+      .eq('device_id', device_id)
+      .limit(20);
+
+    if (error) {
+      console.error('Knowledge search error:', error);
+      res.status(500).json({ error: 'Search failed' });
+      return;
+    }
+
+    // 简单关键词匹配
+    const queryLower = q.toLowerCase();
+    const queryWords = queryLower.split(/\s+/).filter(w => w.length > 1);
+    const results = (docs || [])
+      .map((doc: any) => {
+        const contentLower = doc.content.toLowerCase();
+        const matches = queryWords.filter(w => contentLower.includes(w)).length;
+        return { ...doc, matchCount: matches };
+      })
+      .filter((doc: any) => doc.matchCount > 0)
+      .sort((a: any, b: any) => b.matchCount - a.matchCount)
+      .slice(0, maxResults)
+      .map((doc: any) => ({
+        id: doc.id,
+        name: doc.title,
+        content: doc.content.slice(0, 2000),
+        similarity: doc.matchCount / queryWords.length,
+      }));
+
+    res.json({ results });
+  } catch (err) {
+    console.error('Knowledge search error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
