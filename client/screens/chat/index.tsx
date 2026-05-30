@@ -362,18 +362,43 @@ export default function ChatPage() {
           const pollRes = await fetch(`${API_BASE}/poll?id=${sendData.id}`);
           const pollData = await pollRes.json();
 
-          if (pollData.reply != null) {
+          if (pollData.status === 'error') {
             setIsTyping(false);
             setIsSending(false);
-            setAppStatus('connected');
-            const aiMsg: Message = {
+            setAppStatus('error');
+            const errMsg: Message = {
               id: `ai-${sendData.id}`,
               type: 'ai',
-              text: pollData.reply,
+              text: `【错误】${pollData.error || 'AI回复失败'}`,
               timestamp: formatTime(new Date()),
             };
-            setMessages(prev => [...prev, aiMsg]);
+            setMessages(prev => [...prev, errMsg]);
             return;
+          }
+
+          if (pollData.reply != null) {
+            setAppStatus('connected');
+            // 更新或添加AI消息（streaming时更新内容，done时停止轮询）
+            setMessages(prev => {
+              const existingIndex = prev.findIndex(m => m.id === `ai-${sendData.id}`);
+              if (existingIndex >= 0) {
+                const updated = [...prev];
+                updated[existingIndex] = { ...updated[existingIndex], text: pollData.reply };
+                return updated;
+              }
+              return [...prev, {
+                id: `ai-${sendData.id}`,
+                type: 'ai',
+                text: pollData.reply,
+                timestamp: formatTime(new Date()),
+              }];
+            });
+
+            if (pollData.status === 'done') {
+              setIsTyping(false);
+              setIsSending(false);
+              return;
+            }
           }
 
           pollTimerRef.current = setTimeout(doPoll, 2000);

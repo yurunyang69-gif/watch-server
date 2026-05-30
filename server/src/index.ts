@@ -4,6 +4,7 @@ import multer from "multer";
 import crypto from "crypto";
 import { ASRClient, LLMClient, Config, HeaderUtils, SearchClient, EmbeddingClient } from "coze-coding-dev-sdk";
 import { getSupabaseClient } from "./storage/database/supabase-client.js";
+import { postToWorker, pollWorkerResult } from "./claw-client.js";
 
 const app = express();
 const port = process.env.PORT || 9091;
@@ -19,7 +20,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // 内存存储：对话生成状态（临时状态，不持久化）
 interface ChatRecord {
   id: string;
-  status: 'pending' | 'done' | 'error';
+  status: 'pending' | 'streaming' | 'done' | 'error';
   reply?: string;
   error?: string;
   createdAt: number;
@@ -193,6 +194,59 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
     // 后台异步调用LLM生成回复
     const generateReply = async () => {
       try {
+        // ========== AI_SOURCE=claw 模式：转发到 Worker ==========
+        if (process.env.AI_SOURCE === 'claw') {
+          const historyMessages: Array<{ role: string; content: string }> = [];
+          const ticketId = id;
+
+          await postToWorker(ticketId, {
+            device_id: device_id || 'unknown',
+            message: text,
+            mode: docMode ? 'doc' : 'normal',
+            history: historyMessages,
+          });
+
+          await pollWorkerResult(
+            ticketId,
+            (chunk) => {
+              // 累积流式片段到 reply buffer
+              const current = chatStore.get(ticketId);
+              const partial = (current?.reply || '') + chunk;
+              chatStore.set(ticketId, {
+                id: ticketId,
+                status: 'streaming',
+                reply: partial,
+                createdAt: Date.now(),
+              });
+            },
+            async () => {
+              // 完成：存入数据库
+              const current = chatStore.get(ticketId);
+              const finalReply = current?.reply || '';
+              await client.from('chat_messages').insert({
+                device_id: device_id || 'unknown',
+                type: 'ai',
+                text: finalReply,
+              });
+              chatStore.set(ticketId, {
+                id: ticketId,
+                status: 'done',
+                reply: finalReply,
+                createdAt: Date.now(),
+              });
+            },
+            (err) => {
+              chatStore.set(ticketId, {
+                id: ticketId,
+                status: 'error',
+                error: err,
+                createdAt: Date.now(),
+              });
+            },
+          );
+          return;
+        }
+
         // 查询历史消息作为上下文（最多50条，增强记忆）
         const { data: historyData, error: historyError } = await client
           .from('chat_messages')
