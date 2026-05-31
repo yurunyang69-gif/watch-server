@@ -1,6 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { execSync } from 'child_process';
-import { getReportBuffer, createWrappedFetch } from 'coze-coding-dev-sdk';
+
+// coze-coding-dev-sdk 是内部包，本机可能不存在，做可选导入
+let getReportBuffer: (() => any) | null = null;
+let createWrappedFetch: ((buffer: any, tag: string) => typeof fetch) | null = null;
+try {
+  const sdk = await import('coze-coding-dev-sdk');
+  getReportBuffer = sdk.getReportBuffer || null;
+  createWrappedFetch = sdk.createWrappedFetch || null;
+} catch {
+  // 内部 SDK 不可用，跳过
+}
 
 let envLoaded = false;
 
@@ -105,9 +115,11 @@ function getSupabaseClient(token?: string): SupabaseClient {
     globalOptions.headers = { Authorization: `Bearer ${token}` };
   }
   try {
-    const buffer = getReportBuffer();
-    if (buffer) {
-      globalOptions.fetch = createWrappedFetch(buffer, 'supabase');
+    if (getReportBuffer && createWrappedFetch) {
+      const buffer = getReportBuffer();
+      if (buffer) {
+        globalOptions.fetch = createWrappedFetch(buffer, 'supabase');
+      }
     }
   } catch {
     // Silent — reporting setup failure should not block client creation

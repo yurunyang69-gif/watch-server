@@ -2,7 +2,23 @@ import express, { type Request, type Response } from "express";
 import cors from "cors";
 import multer from "multer";
 import crypto from "crypto";
-import { ASRClient, LLMClient, Config, HeaderUtils, SearchClient, EmbeddingClient } from "coze-coding-dev-sdk";
+// coze-coding-dev-sdk 是内部包，本机可能不存在。
+// 只在使用 LLM/ASR 功能时动态加载；claw 模式不需要。
+let ASRClient: any, LLMClient: any, Config: any, HeaderUtils: any, SearchClient: any;
+async function loadSdk() {
+  if (!Config) {
+    try {
+      const sdk = await import('coze-coding-dev-sdk');
+      ASRClient = sdk.ASRClient;
+      LLMClient = sdk.LLMClient;
+      Config = sdk.Config;
+      HeaderUtils = sdk.HeaderUtils;
+      SearchClient = sdk.SearchClient;
+    } catch {
+      throw new Error('coze-coding-dev-sdk 未安装，请安装后再使用 LLM/ASR 功能');
+    }
+  }
+}
 import { getSupabaseClient } from "./storage/database/supabase-client.js";
 import { sendAndWait } from "./claw-client.js";
 
@@ -264,6 +280,7 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           content: h.text,
         }));
 
+        await loadSdk();
         const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
         const config = new Config();
 
@@ -308,7 +325,7 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           const searchClient = new SearchClient(config, customHeaders);
           const searchRes = await searchClient.webSearch(text, 5, true);
           if (searchRes.web_items && searchRes.web_items.length > 0) {
-            const items = searchRes.web_items.slice(0, 3).map((item, i) => {
+            const items = searchRes.web_items.slice(0, 3).map((item: any, i: number) => {
               return `${i + 1}. ${item.title}\n来源：${item.site_name || '未知'}\n摘要：${item.snippet || ''}`;
             }).join('\n\n');
             searchContext = `\n\n【网络搜索参考资料】\n${items}\n\n`;
@@ -436,6 +453,7 @@ app.post('/api/v1/transcribe', upload.single('audio'), async (req: Request, res:
 
     const audioBase64 = req.file.buffer.toString('base64');
 
+    await loadSdk();
     const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
     const config = new Config();
     const asrClient = new ASRClient(config, customHeaders);
