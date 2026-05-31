@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  rainclaw-server:
+    build: .
+    container_name: rainclaw-server
+    ports:
+      - "9091:9091"
+    environment:
+      - NODE_ENV=production
+      - PORT=9091
+      - AI_SOURCE=claw
+      - WORKER_URL=https://snowy-smoke-edf2.yurunyang69.workers.dev
+      - AI_BACKEND_TOKEN=@yyrAdam~
+      - COZE_SUPABASE_URL=${COZE_SUPABASE_URL}
+      - COZE_SUPABASE_ANON_KEY=${COZE_SUPABASE_ANON_KEY}
+      - COZE_SUPABASE_SERVICE_ROLE_KEY=${COZE_SUPABASE_SERVICE_ROLE_KEY}
+      - POLL_TIMEOUT=30000
+      - POLL_INTERVAL=2000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9091/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
