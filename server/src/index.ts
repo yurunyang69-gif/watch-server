@@ -4,7 +4,7 @@ import multer from "multer";
 import crypto from "crypto";
 import { ASRClient, LLMClient, Config, HeaderUtils, SearchClient, EmbeddingClient } from "coze-coding-dev-sdk";
 import { getSupabaseClient } from "./storage/database/supabase-client.js";
-import { postToWorker, pollWorkerResult } from "./claw-client.js";
+import { sendAndWait } from "./claw-client.js";
 
 const app = express();
 const port = process.env.PORT || 9091;
@@ -199,51 +199,51 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           const historyMessages: Array<{ role: string; content: string }> = [];
           const ticketId = id;
 
-          await postToWorker(ticketId, {
-            device_id: device_id || 'unknown',
-            message: text,
-            mode: docMode ? 'doc' : 'normal',
-            history: historyMessages,
-          });
-
-          await pollWorkerResult(
-            ticketId,
-            (chunk) => {
-              // 累积流式片段到 reply buffer
-              const current = chatStore.get(ticketId);
-              const partial = (current?.reply || '') + chunk;
-              chatStore.set(ticketId, {
-                id: ticketId,
-                status: 'streaming',
-                reply: partial,
-                createdAt: Date.now(),
+          // 异步处理，不阻塞 send 响应
+          (async () => {
+            try {
+              const response = await sendAndWait({
+                text,
+                mode: docMode ? 'doc' : 'normal',
+                deviceId: device_id || 'unknown',
+                history: historyMessages,
               });
-            },
-            async () => {
-              // 完成：存入数据库
-              const current = chatStore.get(ticketId);
-              const finalReply = current?.reply || '';
+
+              // 逐字累积到 chatStore（模拟流式打字效果）
+              let partial = '';
+              for (let i = 0; i < response.length; i++) {
+                partial += response[i];
+                chatStore.set(ticketId, {
+                  id: ticketId,
+                  status: 'streaming',
+                  reply: partial,
+                  createdAt: Date.now(),
+                });
+                await new Promise((r) => setTimeout(r, 30));
+              }
+
+              // 完成，存入数据库
               await client.from('chat_messages').insert({
                 device_id: device_id || 'unknown',
                 type: 'ai',
-                text: finalReply,
+                text: response,
               });
               chatStore.set(ticketId, {
                 id: ticketId,
                 status: 'done',
-                reply: finalReply,
+                reply: response,
                 createdAt: Date.now(),
               });
-            },
-            (err) => {
+            } catch (e: any) {
+              const errorMsg = e.message || 'AI 回复失败，请稍后重试';
               chatStore.set(ticketId, {
                 id: ticketId,
                 status: 'error',
-                error: err,
+                error: errorMsg,
                 createdAt: Date.now(),
               });
-            },
-          );
+            }
+          })();
           return;
         }
 
