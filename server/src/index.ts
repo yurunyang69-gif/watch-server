@@ -207,61 +207,17 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
     // 是否启用文档模式
     const docMode = req.body.doc_mode === true;
 
+    // ========== AI_SOURCE=claw 模式：只写 user 消息到 Supabase，等待 claw 服务写回 assistant 回复 ==========
+    if (process.env.AI_SOURCE === 'claw') {
+      // claw 服务直接轮询 Supabase，处理完自己写 assistant 消息
+      // 后端这里什么都不做，只返回 ok
+      res.json({ ok: true, id });
+      return;
+    }
+
     // 后台异步调用LLM生成回复
     const generateReply = async () => {
       try {
-        // ========== AI_SOURCE=claw 模式：转发到 Worker ==========
-        if (process.env.AI_SOURCE === 'claw') {
-          const historyMessages: Array<{ role: string; content: string }> = [];
-          const ticketId = id;
-
-          // 异步处理，不阻塞 send 响应
-          (async () => {
-            try {
-              const response = await sendAndWait({
-                text,
-                mode: docMode ? 'doc' : 'normal',
-                deviceId: device_id || 'unknown',
-                history: historyMessages,
-              });
-
-              // 逐字累积到 chatStore（模拟流式打字效果）
-              let partial = '';
-              for (let i = 0; i < response.length; i++) {
-                partial += response[i];
-                chatStore.set(ticketId, {
-                  id: ticketId,
-                  status: 'streaming',
-                  reply: partial,
-                  createdAt: Date.now(),
-                });
-                await new Promise((r) => setTimeout(r, 30));
-              }
-
-              // 完成，存入数据库
-              await client.from('chat_messages').insert({
-                device_id: device_id || 'unknown',
-                type: 'ai',
-                text: response,
-              });
-              chatStore.set(ticketId, {
-                id: ticketId,
-                status: 'done',
-                reply: response,
-                createdAt: Date.now(),
-              });
-            } catch (e: any) {
-              const errorMsg = e.message || 'AI 回复失败，请稍后重试';
-              chatStore.set(ticketId, {
-                id: ticketId,
-                status: 'error',
-                error: errorMsg,
-                createdAt: Date.now(),
-              });
-            }
-          })();
-          return;
-        }
 
         // 查询历史消息作为上下文（最多50条，增强记忆）
         const { data: historyData, error: historyError } = await client
