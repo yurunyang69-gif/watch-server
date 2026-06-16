@@ -21,6 +21,24 @@ async function loadSdk() {
 }
 import { getSupabaseClient } from "./storage/database/supabase-client.js";
 import { sendAndWait } from "./claw-client.js";
+import { chat as localChat, checkOllama } from "./local-llm.js"; // 本地大模型调用（Ollama）
+import { chatStream } from "./local-llm.js"; // 本地大模型流式调用（Ollama）
+import type { ChatMessage } from "./local-llm.js"; // 本地大模型消息类型定义
+import { Readable } from "stream"; // 流式输出辅助工具
+import type { Response as ExpressResponse } from "express"; // Express 响应类型别名
+import type { Request as ExpressRequest } from "express"; // Express 请求类型别名
+import type { NextFunction } from "express"; // Express 中间件类型别名
+
+// 本地大模型健康状态缓存（每30秒刷新一次）
+let ollamaStatusCache: { ok: boolean; checkedAt: number; model?: string; error?: string } | null = null;
+async function getOllamaStatus(): Promise<{ ok: boolean; model?: string; error?: string }> {
+  if (ollamaStatusCache && Date.now() - ollamaStatusCache.checkedAt < 30000) {
+    return { ok: ollamaStatusCache.ok, model: ollamaStatusCache.model, error: ollamaStatusCache.error };
+  }
+  const status = await checkOllama();
+  ollamaStatusCache = { ...status, checkedAt: Date.now() };
+  return status;
+}
 
 const app = express();
 const port = process.env.PORT || 9091;
@@ -236,10 +254,6 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           content: h.text,
         }));
 
-        await loadSdk();
-        const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
-        const config = new Config();
-
         // ========== 知识库检索（关键词匹配）==========
         let knowledgeContext = '';
         try {
@@ -247,13 +261,13 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           // 使用 Supabase RPC 函数或直接查询进行关键词匹配
           const queryText = text.toLowerCase();
           const queryWords = queryText.split(/\s+/).filter((w: string) => w.length > 1);
-          
+
           const { data: kbData } = await client
             .from('knowledge_documents')
             .select('id, title, content')
             .eq('device_id', device_id || 'unknown')
             .limit(20);
-          
+
           if (kbData && kbData.length > 0) {
             const scoredDocs = (kbData as any[])
               .map((doc: any) => {
@@ -264,7 +278,7 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
               .filter((d: any) => d.score > 0)
               .sort((a: any, b: any) => b.score - a.score)
               .slice(0, maxResults);
-            
+
             if (scoredDocs.length > 0) {
               knowledgeContext = scoredDocs
                 .map((doc: any, i: number) => `[知识库文档${i + 1}: ${doc.title}]\n${doc.content.slice(0, 1500)}`)
@@ -275,9 +289,12 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           console.warn('Knowledge base search failed:', kbErr);
         }
 
-        // ========== 网页资料搜索 ==========
+        // ========== 网页资料搜索（可选，需要联网）==========
         let searchContext = '';
         try {
+          await loadSdk();
+          const customHeaders = HeaderUtils.extractForwardHeaders(req.headers as Record<string, string>);
+          const config = new Config();
           const searchClient = new SearchClient(config, customHeaders);
           const searchRes = await searchClient.webSearch(text, 5, true);
           if (searchRes.web_items && searchRes.web_items.length > 0) {
@@ -287,17 +304,16 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
             searchContext = `\n\n【网络搜索参考资料】\n${items}\n\n`;
           }
         } catch (searchErr) {
-          console.error('Search error:', searchErr);
+          // 搜索失败不影响本地模型回复（无网络时静默跳过）
+          console.warn('Search unavailable (offline?):', searchErr);
         }
 
-        const llmClient = new LLMClient(config, customHeaders);
-
-        // 构建system prompt
+        // 构建system prompt —— 取消字数限制
         let systemPrompt = '你是雨润Claw，一位贴心的腕上AI助手。你的主人叫杨雨润（英文名Adam）。请结合之前的对话上下文回答用户，保持记忆连贯性。你可以称呼主人为"雨润"或"Adam"。';
         if (docMode) {
-          systemPrompt += '\n\n【文档模式】用户要求以结构化文档形式输出。请使用Markdown格式，包含：\n- 清晰的标题层级（# ## ###）\n- 分点论述\n- 适当的加粗强调\n- 结构化、条理清晰的排版\n回复可以较长（300-800字），确保内容完整、专业。';
+          systemPrompt += '\n\n【文档模式】用户要求以结构化文档形式输出。请使用Markdown格式，包含：\n- 清晰的标题层级（# ## ###）\n- 分点论述\n- 适当的加粗强调\n- 结构化、条理清晰的排版\n请尽可能详细、完整地输出内容，不要精简。';
         } else {
-          systemPrompt += '\n\n默认模式：用简洁、友好、口语化的中文回复，适合在手表小屏幕上阅读。回复控制在100字以内。';
+          systemPrompt += '\n\n请用自然、流畅的中文回复用户，保持友好亲切的语气。回复长度根据问题复杂度决定，不要刻意精简，完整表达你的观点即可。';
         }
         if (searchContext) {
           systemPrompt += '\n\n【搜索增强】以下是从互联网搜索到的最新参考资料，请优先结合这些资料回答用户问题：' + searchContext;
@@ -306,20 +322,13 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
           systemPrompt += '\n\n【个人知识库】以下是从你的个人知识库中检索到的相关资料，请优先结合这些资料回答用户：\n' + knowledgeContext + '\n\n请结合上述知识库内容，给出专业、准确的回答。如果知识库内容不相关，请忽略。';
         }
 
-        const messages = [
-          {
-            role: 'system' as const,
-            content: systemPrompt,
-          },
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt },
           ...historyMessages,
         ];
 
-        const response = await llmClient.invoke(messages, {
-          model: 'doubao-seed-2-0-lite-260215',
-          temperature: 0.8,
-        });
-
-        const reply = response.content || '抱歉，我没听懂，请再说一遍。';
+        // 调用本地大模型（Ollama）
+        const reply = await localChat(messages, { temperature: 0.8 }) || '抱歉，我没听懂，请再说一遍。';
 
         // 保存AI回复到数据库
         const { error: aiInsertError } = await client.from('chat_messages').insert({
@@ -709,6 +718,137 @@ app.get('/api/v1/knowledge/search', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * SSE 流式AI对话（本地大模型 Ollama）
+ * POST /api/v1/chat
+ * Body: { text: string, device_id: string, doc_mode?: boolean }
+ */
+app.post('/api/v1/chat', async (req: Request, res: Response) => {
+  try {
+    const { text, device_id, doc_mode } = req.body;
+    if (!text || typeof text !== 'string') {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
+
+    // 设置SSE响应头
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, no-transform, must-revalidate');
+    res.setHeader('Connection', 'keep-alive');
+
+    const client = getSupabaseClient();
+
+    // 保存用户消息到数据库
+    await client.from('chat_messages').insert({
+      device_id: device_id || 'unknown',
+      type: 'user',
+      text,
+    });
+
+    // 查询历史消息作为上下文
+    const { data: historyData } = await client
+      .from('chat_messages')
+      .select('type, text')
+      .eq('device_id', device_id || 'unknown')
+      .order('created_at', { ascending: true })
+      .limit(50);
+
+    const historyMessages = (historyData || []).map((h: any) => ({
+      role: h.type === 'user' ? 'user' as const : 'assistant' as const,
+      content: h.text,
+    }));
+
+    // 知识库检索
+    let knowledgeContext = '';
+    try {
+      const { data: kbData } = await client
+        .from('knowledge_documents')
+        .select('id, title, content')
+        .eq('device_id', device_id || 'unknown')
+        .limit(20);
+
+      if (kbData && kbData.length > 0) {
+        const queryText = text.toLowerCase();
+        const queryWords = queryText.split(/\s+/).filter((w: string) => w.length > 1);
+        const scoredDocs = (kbData as any[])
+          .map((doc: any) => {
+            const score = queryWords.filter((w: string) => doc.content.toLowerCase().includes(w)).length;
+            return { ...doc, score };
+          })
+          .filter((d: any) => d.score > 0)
+          .sort((a: any, b: any) => b.score - a.score)
+          .slice(0, 3);
+
+        if (scoredDocs.length > 0) {
+          knowledgeContext = scoredDocs
+            .map((doc: any, i: number) => `[知识库文档${i + 1}: ${doc.title}]\n${doc.content.slice(0, 1500)}`)
+            .join('\n\n');
+        }
+      }
+    } catch (kbErr) {
+      console.warn('Knowledge base search failed:', kbErr);
+    }
+
+    // 构建system prompt —— 取消字数限制
+    let systemPrompt = '你是雨润Claw，一位贴心的腕上AI助手。你的主人叫杨雨润（英文名Adam）。请结合之前的对话上下文回答用户，保持记忆连贯性。你可以称呼主人为"雨润"或"Adam"。';
+    if (doc_mode === true) {
+      systemPrompt += '\n\n【文档模式】用户要求以结构化文档形式输出。请使用Markdown格式，包含：\n- 清晰的标题层级（# ## ###）\n- 分点论述\n- 适当的加粗强调\n- 结构化、条理清晰的排版\n请尽可能详细、完整地输出内容，不要精简。';
+    } else {
+      systemPrompt += '\n\n请用自然、流畅的中文回复用户，保持友好亲切的语气。回复长度根据问题复杂度决定，不要刻意精简，完整表达你的观点即可。';
+    }
+    if (knowledgeContext) {
+      systemPrompt += '\n\n【个人知识库】以下是从你的个人知识库中检索到的相关资料，请优先结合这些资料回答用户：\n' + knowledgeContext + '\n\n请结合上述知识库内容，给出专业、准确的回答。如果知识库内容不相关，请忽略。';
+    }
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...historyMessages,
+    ];
+
+    // 流式调用本地大模型
+    let fullReply = '';
+    try {
+      for await (const chunk of chatStream(messages, { temperature: 0.8 })) {
+        res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+        fullReply += chunk;
+      }
+      res.write(`data: [DONE]\n\n`);
+    } catch (streamErr) {
+      console.error('Stream error:', streamErr);
+      res.write(`data: ${JSON.stringify({ error: '生成中断' })}\n\n`);
+    } finally {
+      res.end();
+    }
+
+    // 保存AI回复到数据库
+    if (fullReply) {
+      await client.from('chat_messages').insert({
+        device_id: device_id || 'unknown',
+        type: 'ai',
+        text: fullReply,
+      });
+    }
+  } catch (err) {
+    console.error('Chat SSE error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    } else {
+      res.write(`data: ${JSON.stringify({ error: 'Internal server error' })}\n\n`);
+      res.end();
+    }
+  }
+});
+
+/**
+ * 本地大模型状态检查
+ * GET /api/v1/llm-status
+ */
+app.get('/api/v1/llm-status', async (req: Request, res: Response) => {
+  const status = await getOllamaStatus();
+  res.json(status);
+});
+
 app.listen(port, () => {
   console.log(`Server listening at http://localhost:${port}/`);
+  console.log(`AI模式: 本地大模型 (Ollama: ${process.env.OLLAMA_MODEL || 'qwen2.5:7b'})`);
 });
