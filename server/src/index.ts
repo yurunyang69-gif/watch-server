@@ -2,6 +2,10 @@ import express, { type Request, type Response } from "express";
 import cors from "cors";
 import multer from "multer";
 import crypto from "crypto";
+
+// 加载 .env 文件（确保 AI_SOURCE 等自定义环境变量生效）
+import dotenv from 'dotenv';
+dotenv.config();
 // coze-coding-dev-sdk 是内部包，本机可能不存在。
 // 只在使用 LLM/ASR 功能时动态加载；claw 模式不需要。
 let ASRClient: any, LLMClient: any, Config: any, HeaderUtils: any, SearchClient: any;
@@ -877,5 +881,9 @@ app.get('/api/v1/llm-status', async (req: Request, res: Response) => {
 
 app.listen(port, () => {
   console.log(`Server listening at http://localhost:${port}/`);
-  console.log(`AI模式: 本地大模型 (Ollama: ${process.env.OLLAMA_MODEL || 'qwen2.5:7b'})`);
+  if (process.env.AI_SOURCE === 'claw') {
+    console.log('AI模式: 小艺Claw 对接');
+  } else {
+    console.log(`AI模式: 本地大模型 (Ollama: ${process.env.OLLAMA_MODEL || 'qwen2.5:7b'})`);
+  }
 });
