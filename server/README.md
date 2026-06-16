@@ -8,7 +8,18 @@
 
 ## 技术架构
 
-### 模式一：本地大模型（默认，无需联网）
+### 模式一：小艺Claw 对接（推荐，默认）
+
+```
+手表(Expo Web) → Express后端 → Supabase数据库 ←→ 小艺Claw服务
+```
+
+**特点：**
+- 回复速度快（云端 GPU 推理）
+- 无需本地安装大模型
+- 小艺Claw 直接轮询 Supabase 处理消息
+
+### 模式二：本地大模型（备选，无需联网）
 
 ```
 手表(Expo Web) → Express后端 → Ollama本地大模型
@@ -16,27 +27,27 @@
                 Supabase数据库（多设备同步 + 知识库）
 ```
 
-### 模式二：小艺Claw对接（需联网）
-
-```
-手表(Expo Web) → Express后端 → Supabase数据库 ←→ 小艺Claw服务
-```
+**特点：**
+- 完全离线，保护隐私
+- 需要本地安装 Ollama + 模型（约 4.5GB）
+- 纯 CPU 推理，速度较慢（20-60秒/回复）
 
 | 层级 | 技术栈 |
 |------|--------|
 | 前端 | Expo 54 + React Native + Tailwind CSS |
 | 后端 | Express.js + TypeScript |
 | 数据库 | Supabase (PostgreSQL) |
-| AI模型 | Ollama + Qwen2.5-7B（本地运行，完全免费） |
-| AI对接 | 小艺Claw 直接读写 Supabase（可选） |
+| AI 对接 | 小艺Claw 直接读写 Supabase（默认） |
+| 本地模型 | Ollama + Qwen2.5-7B（可选） |
 
 ## 核心功能
 
-### 1. AI 智能对话（本地大模型）
-- **本地运行，无需联网** —— 通过 Ollama 调用本地 Qwen2.5-7B 模型
+### 1. AI 智能对话
+- **小艺Claw 对接（默认）** —— 云端 GPU 推理，秒级回复
+- **本地大模型（可选）** —— Ollama + Qwen2.5-7B，完全离线
 - 流式输出，逐字显示 AI 回复
 - 对话记忆（保留最近 50 条消息上下文）
-- **取消字数限制** —— AI 根据问题复杂度自然回复，不再强制精简
+- **取消字数限制** —— AI 根据问题复杂度自然回复
 - AI 人格：雨润（温暖、聪明、贴心）
 
 ### 2. 语音输入
@@ -127,64 +138,33 @@
 复制 `.env.example` 为 `.env`，填写以下配置：
 
 ```env
-# Supabase 数据库（多设备同步 + 知识库，必须）
+# --- Supabase 数据库（必须）---
 COZE_SUPABASE_URL=https://你的项目.supabase.co
 COZE_SUPABASE_ANON_KEY=你的anon_key
 COZE_SUPABASE_SERVICE_ROLE_KEY=你的service_role_key
 
-# Ollama 本地大模型配置（默认模式）
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:7b
+# --- AI 模式选择（二选一）---
 
-# Claw 模式配置（可选，如需对接小艺Claw则开启）
-# AI_SOURCE=claw
-# WORKER_URL=https://snowy-smoke-edf2.yurunyang69.workers.dev
-# AI_BACKEND_TOKEN=@yyrAdam~
+# 模式A：小艺Claw 对接（推荐，速度快）
+AI_SOURCE=claw
+
+# 模式B：本地大模型（无需联网，但速度慢）
+# 去掉下面两行前面的 # 即可切换
+# OLLAMA_URL=http://localhost:11434
+# OLLAMA_MODEL=qwen2.5:7b
 
 # 服务端口号
 PORT=9091
 ```
 
-## 本地大模型安装指南
-
-### 1. 安装 Ollama
-
-```bash
-# macOS / Linux
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Windows: 下载安装包 https://ollama.com/download/windows
-```
-
-### 2. 下载模型（推荐 Qwen2.5-7B）
-
-```bash
-# 下载模型（约4.5GB，中文能力顶级）
-ollama pull qwen2.5:7b
-
-# 验证安装
-ollama run qwen2.5:7b
-```
-
-### 3. 启动 Ollama 服务
-
-```bash
-# 默认端口 11434
-ollama serve
-```
-
-> 可选：更换其他模型
-> - `ollama pull llama3.2` — Meta Llama 3.2（3B，更轻量）
-> - `ollama pull deepseek-r1:7b` — DeepSeek R1（推理能力强）
-> - `ollama pull gemma2:9b` — Google Gemma 2
-
 ## 启动方式
 
-### 本地开发
+### 小艺Claw 模式（推荐，默认）
 
 ```bash
-# 1. 先启动 Ollama（确保本地模型服务在跑）
-ollama serve
+# 1. 配置 .env
+cp server/.env.example server/.env
+# 编辑 .env，确保 AI_SOURCE=claw
 
 # 2. 启动后端
 cd server/
@@ -196,12 +176,26 @@ cd client/
 npx expo start --web
 ```
 
+### 本地大模型模式（备选，完全离线）
+
+```bash
+# 1. 安装 Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 2. 下载模型（约4.5GB）
+ollama pull qwen2.5:7b
+ollama serve
+
+# 3. 配置 .env（切换到本地模型）
+cp server/.env.example server/.env
+# 编辑 .env，注释掉 AI_SOURCE=claw，启用 OLLAMA_MODEL
+
+# 4. 启动前后端（同上）
+```
+
 ### Docker 部署
 
 ```bash
-# 注意：Docker 内无法直接访问宿主机的 Ollama
-# 方案1：在容器内安装 Ollama（需大内存，不推荐）
-# 方案2：使用 host 网络模式，让容器访问宿主机的 Ollama
 docker compose up -d --build
 ```
 
@@ -224,19 +218,7 @@ docker compose up -d --build
 
 ## 数据流
 
-### 本地大模型模式（默认）
-
-```
-手表 → Express后端(/api/v1/chat 或 /api/v1/send)
-         ↓
-    调用本地 Ollama 大模型生成回复
-         ↓
-    回复写入 Supabase（多设备同步）
-         ↓
-    手表 SSE 流式显示 / 轮询获取回复
-```
-
-### 小艺Claw模式（可选，需设置 AI_SOURCE=claw）
+### 小艺Claw 模式（默认）
 
 ```
 手表 → Express后端(/api/v1/send)
@@ -248,6 +230,18 @@ docker compose up -d --build
     小艺Claw处理完 → 写入 Supabase(type='assistant')
          ↓
     手表轮询(/api/v1/poll) → 获取 assistant 回复
+```
+
+### 本地大模型模式（可选）
+
+```
+手表 → Express后端(/api/v1/chat 或 /api/v1/send)
+         ↓
+    调用本地 Ollama 大模型生成回复
+         ↓
+    回复写入 Supabase（多设备同步）
+         ↓
+    手表 SSE 流式显示 / 轮询获取回复
 ```
 
 ## 作者

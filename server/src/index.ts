@@ -58,6 +58,7 @@ interface ChatRecord {
   reply?: string;
   error?: string;
   createdAt: number;
+  deviceId?: string;
 }
 
 const chatStore = new Map<string, ChatRecord>();
@@ -209,6 +210,7 @@ app.post('/api/v1/send', async (req: Request, res: Response) => {
       id,
       status: 'pending',
       createdAt: Date.now(),
+      deviceId: device_id || 'unknown',
     });
 
     // 保存用户消息到数据库
@@ -386,13 +388,38 @@ app.get('/api/v1/poll', async (req: Request, res: Response) => {
       return;
     }
 
+    // claw 模式：去 Supabase 查询 claw 服务写回的 assistant 回复
+    if (process.env.AI_SOURCE === 'claw' && record.status === 'pending' && record.deviceId) {
+      const client = getSupabaseClient();
+      // 查询该设备在 send 时间之后最新的非 user 消息（即 ai/assistant 回复）
+      const { data: replyData, error: replyError } = await client
+        .from('chat_messages')
+        .select('type, text, created_at')
+        .eq('device_id', record.deviceId)
+        .neq('type', 'user')
+        .gt('created_at', new Date(record.createdAt).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (!replyError && replyData && replyData.length > 0) {
+        const reply = replyData[0].text;
+        chatStore.set(id, { ...record, status: 'done', reply });
+        res.json({ reply, status: 'done' });
+        return;
+      }
+
+      // 还没收到回复，继续等待
+      res.json({ error: 'nf' });
+      return;
+    }
+
     if (record.status === 'done' && record.reply != null) {
-      res.json({ reply: record.reply });
+      res.json({ reply: record.reply, status: 'done' });
       return;
     }
 
     if (record.status === 'error') {
-      res.json({ error: record.error || 'generation failed' });
+      res.json({ error: record.error || 'generation failed', status: 'error' });
       return;
     }
 
